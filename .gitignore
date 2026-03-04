@@ -1,0 +1,23 @@
+# ビルド成果物
+build/work/
+build/pcinfo-classic.iso
+build/test_result.log
+
+# コンパイル済みバイナリ (ソースからビルドする)
+build/fbprint
+build/meminfo
+
+# ログ・一時ファイル
+wget-log*
+test.txt
+*.log
+
+# スクリーンショット
+*.png
+
+# OS
+.DS_Store
+Thumbs.db
+
+.devcontainer/*
+.github/*
