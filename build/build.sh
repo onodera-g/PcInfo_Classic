@@ -149,28 +149,90 @@ patch_initrd() {
 BOOTLOCAL_EOF
     chmod 755 "$INITRD_WORK/opt/bootlocal.sh"
 
+    # autologin: 元の動作（login -f root 経由）に戻す
+    cat > "$INITRD_WORK/sbin/autologin" << 'AUTOLOGIN_EOF'
+#!/bin/busybox ash
+if [ -f /var/log/autologin ] ; then
+    exec /sbin/getty 38400 tty1
+else
+    touch /var/log/autologin
+    exec login -f root
+fi
+AUTOLOGIN_EOF
+    chmod 755 "$INITRD_WORK/sbin/autologin"
+
+    # profile.d: single-key input (no Enter needed) via stty cbreak + dd
     mkdir -p "$INITRD_WORK/etc/profile.d"
     cat > "$INITRD_WORK/etc/profile.d/pcinfo.sh" << 'PROFILE_EOF'
 #!/bin/sh
-# PCInfo Classic - フレームバッファ直接描画 (fbprint: PSF2 16x16で正方形CJK表示)
+FBPRINT=/usr/local/bin/fbprint
+FONT=/usr/share/consolefonts/unifont_ja.psf.gz
+FB=/dev/fb0
+TTY=/dev/tty1
 
-if [ -e /dev/fb0 ] && [ -x /usr/local/bin/fbprint ]; then
-    # fbconの残留テキストをクリア
-    printf '\033[2J\033[H' > /dev/tty1 2>/dev/null
-    # pcinfo出力をfbprintで直接フレームバッファに描画
-    {
-        /opt/pcinfo.sh
-        printf '\n'
-        printf 'Press Enter to exit...\n'
-    } | /usr/local/bin/fbprint /usr/share/consolefonts/unifont_ja.psf.gz /dev/fb0
-    read -r _dummy < /dev/tty1
-else
-    # フォールバック: 通常端末出力
+read_key() {
+    _old=$(stty -g < "$TTY")
+    stty -icanon -echo min 1 time 0 < "$TTY"
+    key=$(dd bs=1 count=1 < "$TTY" 2>/dev/null)
+    stty "$_old" < "$TTY"
+}
+
+if [ ! -e "$FB" ] || [ ! -x "$FBPRINT" ]; then
     /opt/pcinfo.sh
-    echo ""
-    echo "Press Enter to exit..."
-    read -r _dummy
+    printf "Press any key to exit..." > "$TTY"
+    read_key
+    return
 fi
+
+while true; do
+    printf '\033[2J\033[H' > "$TTY" 2>/dev/null
+    {
+        printf " ____      ___        __          ____ _               _      \n"
+        printf "|  _ \\___|_ _|_ __  / _| ___    / ___| | __ _ ___ ___(_) ___ \n"
+        printf "| |_) / __|| || '_ \\| |_ / _ \\  | |   | |/ _\` / __/ __| |/ __|\n"
+        printf "|  __/ (__ | || | | |  _| (_) | | |___| | (_| \\__ \\__ \\ | (__ \n"
+        printf "|_|   \\___|___|_| |_|_|  \\___/   \\____|_|\\__,_|___/___/_|\\___|\n"
+        printf "                                      Powered by Tiny Core Linux\n"
+        printf "\n"
+        printf "  1. PC情報\n"
+        printf "  2. メモリテスト\n"
+        printf "  3. GPUテスト\n"
+        printf "  4. ストレージ情報\n"
+        printf "  q. Quit\n"
+        printf "\n  Select [1-4/q]: "
+    } | "$FBPRINT" "$FONT" "$FB"
+
+    read_key
+
+    case "$key" in
+        1)
+            printf '\033[2J\033[H' > "$TTY" 2>/dev/null
+            {
+                /opt/pcinfo.sh
+                printf "\n  任意のキーで戻る...\n"
+            } | "$FBPRINT" "$FONT" "$FB"
+            read_key
+            ;;
+        2)
+            printf '\033[2J\033[H' > "$TTY" 2>/dev/null
+            printf "[メモリテスト]\n\n未実装\n\n任意のキーで戻る...\n" | "$FBPRINT" "$FONT" "$FB"
+            read_key
+            ;;
+        3)
+            printf '\033[2J\033[H' > "$TTY" 2>/dev/null
+            printf "[GPUテスト]\n\n未実装\n\n任意のキーで戻る...\n" | "$FBPRINT" "$FONT" "$FB"
+            read_key
+            ;;
+        4)
+            printf '\033[2J\033[H' > "$TTY" 2>/dev/null
+            printf "[ストレージ情報]\n\n未実装\n\n任意のキーで戻る...\n" | "$FBPRINT" "$FONT" "$FB"
+            read_key
+            ;;
+        q|Q)
+            break
+            ;;
+    esac
+done
 PROFILE_EOF
     chmod 755 "$INITRD_WORK/etc/profile.d/pcinfo.sh"
 
@@ -178,10 +240,9 @@ PROFILE_EOF
     find . | cpio -o -H newc --quiet | gzip -9 > "$INITRD_PATH"
     cd "$REPO_ROOT"
 
-    # Replace TCL kernel with Debian netboot kernel (vesafb+fbcon built-in)
-    log "Replacing TCL kernel with Debian bookworm netboot vmlinuz ..."
-    cp "$DEBIAN_VMLINUZ" "$ISO_EXTRACT/boot/vmlinuz64"
-    log "Kernel replaced: $(du -sh "$ISO_EXTRACT/boot/vmlinuz64" | cut -f1)"
+    # Keep TCL original kernel: USB HID is built-in -> keyboard works
+    # Debian netboot kernel lacks usbhid module in TCL initrd -> keyboard LED goes off
+    log "Keeping TCL original kernel (USB HID built-in, vesafb built-in)"
 
     # Patch isolinux.cfg: enable vesafb framebuffer (vga=794 = 1024x768x16)
     # nodhcp: skip DHCP wait (TCL waits up to 60s for DHCP without this)

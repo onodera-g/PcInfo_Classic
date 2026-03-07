@@ -2,10 +2,25 @@
 # pcinfo.sh - PC情報収集ツール for Tiny Core Linux
 # BusyBox compatible shell script
 
+# autologin 経由で直接起動された場合に PATH が未設定の可能性があるため明示
+export PATH="/usr/local/sbin:/usr/local/bin:/apps/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 CYAN='\033[0;36m'
 BOLD='\033[1m'
 RESET='\033[0m'
 SEP='--------------------------------------------------------------------------------'
+
+FBPRINT=/usr/local/bin/fbprint
+FONT=/usr/share/consolefonts/unifont_ja.psf.gz
+FB=/dev/fb0
+
+# フレームバッファ描画が使えるか
+use_fb() { [ -x "$FBPRINT" ] && [ -e "$FB" ]; }
+
+# 画面クリア
+cls() {
+    printf '\033[2J\033[H'
+}
 
 # ============================================================
 # ユーティリティ
@@ -59,7 +74,7 @@ kb_to_human() {
 # バナー
 # ============================================================
 show_banner() {
-    clear
+    cls
     printf "${BOLD}${CYAN}"
     echo " ____      ___        __          ____ _               _      "
     echo "|  _ \ ___|_ _|_ __  / _| ___    / ___| | __ _ ___ ___(_) ___ "
@@ -1524,17 +1539,10 @@ show_storage() {
     done
 }
 
-# ============================================================
-# メイン
-# ============================================================
-main() {
-    show_banner
-    show_cpu
-    show_memory
-    show_motherboard
-    show_gpu
-    show_storage
-    echo ""
-}
-
-main "$@"
+# profile.d のメニューから呼ばれる: 情報を stdout に出力するだけ
+show_cpu
+show_memory
+show_motherboard
+show_gpu
+show_storage
+printf "\n"
