@@ -100,6 +100,16 @@ patch_initrd() {
     cp "$SRC_SCRIPT" "$INITRD_WORK/opt/pcinfo.sh"
     chmod 755 "$INITRD_WORK/opt/pcinfo.sh"
 
+    log "Installing menu scripts into /opt/ ..."
+    for script in common.sh menu.sh menu_pcinfo.sh menu_memtest.sh menu_gpu.sh menu_storage.sh; do
+        cp "$REPO_ROOT/src/$script" "$INITRD_WORK/opt/$script"
+        chmod 755 "$INITRD_WORK/opt/$script"
+    done
+
+    log "Installing GPU ID databases into /opt/ ..."
+    cp "$REPO_ROOT/src/pci_gpu.ids"  "$INITRD_WORK/opt/pci_gpu.ids"
+    cp "$REPO_ROOT/src/vram_gpu.ids" "$INITRD_WORK/opt/vram_gpu.ids"
+
     log "Installing font (unifont_ja.psf.gz: PSF2 16x16 CJK) ..."
     mkdir -p "$INITRD_WORK/usr/share/consolefonts"
     cp "$SRC_FONT" "$INITRD_WORK/usr/share/consolefonts/unifont_ja.psf.gz"
@@ -161,80 +171,11 @@ fi
 AUTOLOGIN_EOF
     chmod 755 "$INITRD_WORK/sbin/autologin"
 
-    # profile.d: single-key input (no Enter needed) via stty cbreak + dd
+    # profile.d: menu.sh を呼び出すだけ
     mkdir -p "$INITRD_WORK/etc/profile.d"
-    cat > "$INITRD_WORK/etc/profile.d/pcinfo.sh" << 'PROFILE_EOF'
-#!/bin/sh
-FBPRINT=/usr/local/bin/fbprint
-FONT=/usr/share/consolefonts/unifont_ja.psf.gz
-FB=/dev/fb0
-TTY=/dev/tty1
-
-read_key() {
-    _old=$(stty -g < "$TTY")
-    stty -icanon -echo min 1 time 0 < "$TTY"
-    key=$(dd bs=1 count=1 < "$TTY" 2>/dev/null)
-    stty "$_old" < "$TTY"
-}
-
-if [ ! -e "$FB" ] || [ ! -x "$FBPRINT" ]; then
-    /opt/pcinfo.sh
-    printf "Press any key to exit..." > "$TTY"
-    read_key
-    return
-fi
-
-while true; do
-    printf '\033[2J\033[H' > "$TTY" 2>/dev/null
-    {
-        printf " ____      ___        __          ____ _               _      \n"
-        printf "|  _ \\___|_ _|_ __  / _| ___    / ___| | __ _ ___ ___(_) ___ \n"
-        printf "| |_) / __|| || '_ \\| |_ / _ \\  | |   | |/ _\` / __/ __| |/ __|\n"
-        printf "|  __/ (__ | || | | |  _| (_) | | |___| | (_| \\__ \\__ \\ | (__ \n"
-        printf "|_|   \\___|___|_| |_|_|  \\___/   \\____|_|\\__,_|___/___/_|\\___|\n"
-        printf "                                      Powered by Tiny Core Linux\n"
-        printf "\n"
-        printf "  1. PC情報\n"
-        printf "  2. メモリテスト\n"
-        printf "  3. GPUテスト\n"
-        printf "  4. ストレージ情報\n"
-        printf "  q. Quit\n"
-        printf "\n  Select [1-4/q]: "
-    } | "$FBPRINT" "$FONT" "$FB"
-
-    read_key
-
-    case "$key" in
-        1)
-            printf '\033[2J\033[H' > "$TTY" 2>/dev/null
-            {
-                /opt/pcinfo.sh
-                printf "\n  任意のキーで戻る...\n"
-            } | "$FBPRINT" "$FONT" "$FB"
-            read_key
-            ;;
-        2)
-            printf '\033[2J\033[H' > "$TTY" 2>/dev/null
-            printf "[メモリテスト]\n\n未実装\n\n任意のキーで戻る...\n" | "$FBPRINT" "$FONT" "$FB"
-            read_key
-            ;;
-        3)
-            printf '\033[2J\033[H' > "$TTY" 2>/dev/null
-            printf "[GPUテスト]\n\n未実装\n\n任意のキーで戻る...\n" | "$FBPRINT" "$FONT" "$FB"
-            read_key
-            ;;
-        4)
-            printf '\033[2J\033[H' > "$TTY" 2>/dev/null
-            printf "[ストレージ情報]\n\n未実装\n\n任意のキーで戻る...\n" | "$FBPRINT" "$FONT" "$FB"
-            read_key
-            ;;
-        q|Q)
-            break
-            ;;
-    esac
-done
-PROFILE_EOF
+    printf '#!/bin/sh\n/opt/menu.sh\n' > "$INITRD_WORK/etc/profile.d/pcinfo.sh"
     chmod 755 "$INITRD_WORK/etc/profile.d/pcinfo.sh"
+
 
     log "Repacking initrd ..."
     find . | cpio -o -H newc --quiet | gzip -9 > "$INITRD_PATH"
