@@ -327,7 +327,6 @@ show_storage() {
 
         item "モデル番号" "${model:-N/A}"
         item "サイズ" "$size_str"
-        sep
     done
 }
 

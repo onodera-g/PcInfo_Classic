@@ -201,7 +201,7 @@ int main(int argc, char **argv) {
     /* Load PSF2 font */
     gzFile gz = gzopen(font_path, "rb");
     if (!gz) { fprintf(stderr, "cannot open font: %s\n", font_path); return 1; }
-    uint8_t raw[1<<20]; int raw_len = 0, n;
+    static uint8_t raw[1<<21]; int raw_len = 0, n; /* 2MB buffer for large fonts */
     while ((n = gzread(gz, raw + raw_len, sizeof(raw) - raw_len)) > 0) raw_len += n;
     gzclose(gz);
     

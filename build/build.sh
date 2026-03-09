@@ -153,6 +153,97 @@ patch_initrd() {
         log "WARNING: meminfo not available"
     fi
 
+    # memtester: ユーザー空間メモリテストツール
+    MEMTESTER_URL="https://pyropus.ca./software/memtester/old-versions/memtester-4.6.0.tar.gz"
+    MEMTESTER_BIN="$WORK_DIR/memtester"
+    if [ ! -f "$MEMTESTER_BIN" ]; then
+        log "Building memtester (user-space memory tester) ..."
+        MEMTESTER_TAR="$WORK_DIR/memtester.tar.gz"
+        if [ ! -f "$MEMTESTER_TAR" ]; then
+            wget -q -O "$MEMTESTER_TAR" "$MEMTESTER_URL" || log "WARNING: memtester download failed"
+        fi
+        if [ -f "$MEMTESTER_TAR" ]; then
+            MEMTESTER_SRC_DIR="$WORK_DIR/memtester-4.6.0"
+            rm -rf "$MEMTESTER_SRC_DIR"
+            tar xzf "$MEMTESTER_TAR" -C "$WORK_DIR"
+            if [ -d "$MEMTESTER_SRC_DIR" ]; then
+                echo 'cc -O2 -static' > "$MEMTESTER_SRC_DIR/conf-cc"
+                echo 'cc -static' > "$MEMTESTER_SRC_DIR/conf-ld"
+                make -C "$MEMTESTER_SRC_DIR" -j$(nproc) 2>/dev/null \
+                    && cp "$MEMTESTER_SRC_DIR/memtester" "$MEMTESTER_BIN" \
+                    && log "memtester built: $(du -sh "$MEMTESTER_BIN" | cut -f1)" \
+                    || log "WARNING: memtester build failed"
+            fi
+        fi
+    fi
+    if [ -f "$MEMTESTER_BIN" ]; then
+        mkdir -p "$INITRD_WORK/usr/local/bin"
+        cp "$MEMTESTER_BIN" "$INITRD_WORK/usr/local/bin/memtester"
+        chmod 755 "$INITRD_WORK/usr/local/bin/memtester"
+        log "memtester installed"
+    else
+        log "WARNING: memtester not available"
+    fi
+
+    # kexec: カーネル/バイナリ切り替えツール（memtest86+起動用）
+    KEXEC_URL="https://git.kernel.org/pub/scm/utils/kernel/kexec/kexec-tools.git/snapshot/kexec-tools-2.0.29.tar.gz"
+    KEXEC_BIN="$WORK_DIR/kexec"
+    if [ ! -f "$KEXEC_BIN" ]; then
+        log "Building kexec (kernel execution tool) ..."
+        KEXEC_TAR="$WORK_DIR/kexec-tools.tar.gz"
+        if [ ! -f "$KEXEC_TAR" ]; then
+            wget -q -O "$KEXEC_TAR" "$KEXEC_URL" || log "WARNING: kexec download failed"
+        fi
+        if [ -f "$KEXEC_TAR" ]; then
+            KEXEC_SRC_DIR="$WORK_DIR/kexec-tools-2.0.29"
+            rm -rf "$KEXEC_SRC_DIR"
+            tar xzf "$KEXEC_TAR" -C "$WORK_DIR"
+            if [ -d "$KEXEC_SRC_DIR" ]; then
+                cd "$KEXEC_SRC_DIR"
+                ./bootstrap >/dev/null 2>&1
+                LDFLAGS="-static" ./configure --prefix=/tmp/kexec-install >/dev/null 2>&1
+                make -j$(nproc) >/dev/null 2>&1 \
+                    && cp build/sbin/kexec "$KEXEC_BIN" \
+                    && log "kexec built: $(du -sh "$KEXEC_BIN" | cut -f1)" \
+                    || log "WARNING: kexec build failed"
+                cd "$REPO_ROOT"
+            fi
+        fi
+    fi
+    if [ -f "$KEXEC_BIN" ]; then
+        mkdir -p "$INITRD_WORK/usr/local/bin"
+        cp "$KEXEC_BIN" "$INITRD_WORK/usr/local/bin/kexec"
+        chmod 755 "$INITRD_WORK/usr/local/bin/kexec"
+        log "kexec installed"
+    else
+        log "WARNING: kexec not available"
+    fi
+
+    # memtest86+: スタンドアロンメモリテスト（kexecで起動）
+    MEMTEST86_URL="https://memtest.org/download/v8.00/mt86plus_8.00.binaries.zip"
+    MEMTEST86_BIN="$WORK_DIR/memtest86plus.bin"
+    if [ ! -f "$MEMTEST86_BIN" ]; then
+        log "Downloading memtest86+ ..."
+        MEMTEST86_ZIP="$WORK_DIR/memtest86plus.zip"
+        wget -q -O "$MEMTEST86_ZIP" "$MEMTEST86_URL" || log "WARNING: memtest86+ download failed"
+        if [ -f "$MEMTEST86_ZIP" ]; then
+            unzip -o -q "$MEMTEST86_ZIP" -d "$WORK_DIR" 2>/dev/null
+            # x86_64 バイナリを使用
+            if [ -f "$WORK_DIR/mt86p_800_x86_64" ]; then
+                cp "$WORK_DIR/mt86p_800_x86_64" "$MEMTEST86_BIN"
+                log "memtest86+ downloaded: $(du -sh "$MEMTEST86_BIN" | cut -f1)"
+            fi
+        fi
+    fi
+    if [ -f "$MEMTEST86_BIN" ]; then
+        mkdir -p "$INITRD_WORK/boot"
+        cp "$MEMTEST86_BIN" "$INITRD_WORK/boot/memtest86plus.bin"
+        chmod 644 "$INITRD_WORK/boot/memtest86plus.bin"
+        log "memtest86+ installed to /boot/"
+    else
+        log "WARNING: memtest86+ not available"
+    fi
+
     # bootlocal.sh (nothing to do - vesafb creates /dev/fb0 automatically with vga=794)
     cat > "$INITRD_WORK/opt/bootlocal.sh" << 'BOOTLOCAL_EOF'
 #!/bin/sh
@@ -192,7 +283,16 @@ AUTOLOGIN_EOF
         sed -i 's/ vga=[0-9]*//' "$ISOLINUX_CFG"
         sed -i 's/ nodhcp//' "$ISOLINUX_CFG"
         sed -i 's/append loglevel=3/append loglevel=3 vga=794 nodhcp nozswap/' "$ISOLINUX_CFG"
-        log "Patched isolinux.cfg with vga=794 nodhcp nozswap"
+        # memtest86+ エントリを追加
+        if ! grep -q "memtest86plus" "$ISOLINUX_CFG"; then
+            cat >> "$ISOLINUX_CFG" << 'ISOLINUX_MEMTEST'
+
+LABEL memtest
+    MENU LABEL Memtest86+ (Memory Test)
+    KERNEL /boot/memtest86plus.bin
+ISOLINUX_MEMTEST
+        fi
+        log "Patched isolinux.cfg with vga=794 nodhcp nozswap + memtest86+"
     fi
 }
 
@@ -220,11 +320,26 @@ rebuild_iso() {
     log "Building GRUB EFI bootloader ..."
     mkdir -p "$ISO_EXTRACT/EFI/BOOT"
 
+    # memtest86+ をISO rootにもコピー（GRUBから参照用）
+    if [ -f "$WORK_DIR/memtest86plus.bin" ]; then
+        cp "$WORK_DIR/memtest86plus.bin" "$ISO_EXTRACT/boot/memtest86plus.bin"
+        log "memtest86+ copied to ISO /boot/"
+    fi
+
+    # memtest86+ EFI: bzImage形式はEFI stubを含むのでchainloader可能
+    # EFIパーティションにもコピー
+    if [ -f "$WORK_DIR/memtest86plus.bin" ]; then
+        mkdir -p "$ISO_EXTRACT/EFI/BOOT"
+        cp "$WORK_DIR/memtest86plus.bin" "$ISO_EXTRACT/EFI/BOOT/memtest86.efi"
+        log "memtest86+ copied to EFI/BOOT/memtest86.efi"
+    fi
+
     # grub.cfg: load kernel and initrd from ISO
+    # timeout=5 でメニュー表示（memtest86+選択用）
     cat > /tmp/grub_embed.cfg << 'GRUB_EOF'
 set gfxmode=1024x768,800x600,auto
 set gfxpayload=keep
-set timeout=0
+set timeout=5
 set default=0
 
 # Find the device containing our ISO filesystem by searching for a known file
@@ -234,12 +349,17 @@ menuentry "PcInfo Classic" {
     linux /boot/vmlinuz64 loglevel=3 quiet nomodeset=0 vga=794 nodhcp nozswap
     initrd /boot/corepure64.gz
 }
+
+menuentry "Memtest86+ (Memory Test)" {
+    search --set=root --file /EFI/BOOT/memtest86.efi
+    chainloader /EFI/BOOT/memtest86.efi
+}
 GRUB_EOF
 
     grub-mkstandalone \
         --format=x86_64-efi \
         --output="$ISO_EXTRACT/EFI/BOOT/bootx64.efi" \
-        --modules="part_gpt part_msdos fat iso9660 linux normal echo all_video gfxterm gfxterm_background test search search_fs_file" \
+        --modules="part_gpt part_msdos fat iso9660 linux linux16 normal echo all_video gfxterm gfxterm_background test search search_fs_file chain" \
         "boot/grub/grub.cfg=/tmp/grub_embed.cfg" 2>/dev/null \
     || die "Failed to build GRUB EFI"
 
@@ -248,13 +368,18 @@ GRUB_EOF
     # Create EFI boot image (FAT img) for El Torito EFI entry
     # Use mtools (no loop mount needed) - image must be larger than bootx64.efi (~6MB)
     EFI_IMG="$ISO_EXTRACT/boot/efi.img"
-    EFI_SIZE_MB=12  # 12MB: enough for bootx64.efi (~6MB) with FAT16
+    EFI_SIZE_MB=12  # 12MB: enough for bootx64.efi (~6MB) + memtest86.efi with FAT16
     dd if=/dev/zero of="$EFI_IMG" bs=1M count="$EFI_SIZE_MB" 2>/dev/null
     mformat -i "$EFI_IMG" :: 2>/dev/null
     mmd -i "$EFI_IMG" ::/EFI ::/EFI/BOOT 2>/dev/null
     mcopy -i "$EFI_IMG" "$ISO_EXTRACT/EFI/BOOT/bootx64.efi" ::/EFI/BOOT/ 2>/dev/null \
         && log "EFI files copied into efi.img via mtools" \
         || die "mcopy failed: cannot create EFI boot image"
+    # memtest86も追加
+    if [ -f "$ISO_EXTRACT/EFI/BOOT/memtest86.efi" ]; then
+        mcopy -i "$EFI_IMG" "$ISO_EXTRACT/EFI/BOOT/memtest86.efi" ::/EFI/BOOT/ 2>/dev/null \
+            && log "memtest86.efi added to efi.img"
+    fi
 
     # Build dual-boot ISO (Legacy BIOS via isolinux + UEFI via GRUB EFI)
     xorriso -as mkisofs \

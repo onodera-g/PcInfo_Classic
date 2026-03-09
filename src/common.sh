@@ -9,11 +9,16 @@ LINES_PER_PAGE=43
 
 # 1文字即時入力: raw モードで1バイト読み、割り込み時も必ず stty を復元する
 read_key() {
-    _old=$(stty -g < "$TTY")
-    trap 'stty "$_old" < "$TTY"' INT TERM
-    stty -icanon -echo min 1 time 0 < "$TTY"
+    # TTYが有効かチェック（シャットダウン時のエラー回避）
+    if ! [ -c "$TTY" ] || ! stty -g < "$TTY" > /dev/null 2>&1; then
+        key=""
+        return 1
+    fi
+    _old=$(stty -g < "$TTY" 2>/dev/null)
+    trap 'stty "$_old" < "$TTY" 2>/dev/null' INT TERM
+    stty -icanon -echo min 1 time 0 < "$TTY" 2>/dev/null
     key=$(dd bs=1 count=1 < "$TTY" 2>/dev/null)
-    stty "$_old" < "$TTY"
+    stty "$_old" < "$TTY" 2>/dev/null
     trap - INT TERM
 }
 
