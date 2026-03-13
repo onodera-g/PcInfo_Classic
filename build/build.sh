@@ -316,33 +316,147 @@ rebuild_iso() {
     ISOLINUX_DIR=$(dirname "$ISOLINUX_BIN")
     ISOLINUX_RELDIR="${ISOLINUX_DIR#$ISO_EXTRACT/}"
 
-    # --- Build GRUB EFI bootloader ---
-    log "Building GRUB EFI bootloader ..."
-    mkdir -p "$ISO_EXTRACT/EFI/BOOT"
-
-    # memtest86+ をISO rootにもコピー（GRUBから参照用）
-    if [ -f "$WORK_DIR/memtest86plus.bin" ]; then
-        cp "$WORK_DIR/memtest86plus.bin" "$ISO_EXTRACT/boot/memtest86plus.bin"
-        log "memtest86+ copied to ISO /boot/"
-    fi
-
-    # memtest86+ EFI: bzImage形式はEFI stubを含むのでchainloader可能
-    # EFIパーティションにもコピー
-    if [ -f "$WORK_DIR/memtest86plus.bin" ]; then
-        mkdir -p "$ISO_EXTRACT/EFI/BOOT"
-        cp "$WORK_DIR/memtest86plus.bin" "$ISO_EXTRACT/EFI/BOOT/memtest86.efi"
-        log "memtest86+ copied to EFI/BOOT/memtest86.efi"
-    fi
-
-    # grub.cfg: load kernel and initrd from ISO
-    # timeout=5 でメニュー表示（memtest86+選択用）
+    # --- Build USB Image (not ISO) ---
+    # mtoolsを使用（コンテナ環境でも動作）
+    # パーティション1: EFI System Partition (FAT32, 書き込み可能) - grubenv保存用
+    # パーティション2: データパーティション (FAT32) - カーネル、initrd等
+    
+    log "Building USB image with writable EFI partition..."
+    
+    OUT_IMG="${OUT_ISO%.iso}.img"
+    
+    # サイズ計算: データ + EFI + 余裕
+    DATA_SIZE=$(du -sm "$ISO_EXTRACT" | cut -f1)
+    EFI_SIZE_MB=32   # EFI パーティション (GRUB + memtest86 + grubenv)
+    TOTAL_SIZE_MB=$((DATA_SIZE + EFI_SIZE_MB + 16))  # 16MB余裕
+    
+    log "Creating ${TOTAL_SIZE_MB}MB USB image..."
+    
+    # 空のイメージ作成
+    dd if=/dev/zero of="$OUT_IMG" bs=1M count="$TOTAL_SIZE_MB" status=none
+    
+    # GPTパーティションテーブル作成
+    parted -s "$OUT_IMG" mklabel gpt
+    parted -s "$OUT_IMG" mkpart ESP fat32 1MiB ${EFI_SIZE_MB}MiB
+    parted -s "$OUT_IMG" set 1 esp on
+    parted -s "$OUT_IMG" mkpart DATA fat32 ${EFI_SIZE_MB}MiB 100%
+    
+    # パーティションのオフセットを取得（セクタ単位、512バイト/セクタ）
+    EFI_START_SEC=$(parted -s "$OUT_IMG" unit s print | grep "^ 1 " | awk '{print $2}' | tr -d 's')
+    EFI_END_SEC=$(parted -s "$OUT_IMG" unit s print | grep "^ 1 " | awk '{print $3}' | tr -d 's')
+    DATA_START_SEC=$(parted -s "$OUT_IMG" unit s print | grep "^ 2 " | awk '{print $2}' | tr -d 's')
+    DATA_END_SEC=$(parted -s "$OUT_IMG" unit s print | grep "^ 2 " | awk '{print $3}' | tr -d 's')
+    
+    EFI_SIZE_SEC=$((EFI_END_SEC - EFI_START_SEC + 1))
+    DATA_SIZE_SEC=$((DATA_END_SEC - DATA_START_SEC + 1))
+    
+    log "EFI partition: sectors $EFI_START_SEC-$EFI_END_SEC ($EFI_SIZE_SEC sectors)"
+    log "DATA partition: sectors $DATA_START_SEC-$DATA_END_SEC ($DATA_SIZE_SEC sectors)"
+    
+    # 個別のFATイメージを作成してから結合
+    EFI_PART="$WORK_DIR/efi_part.img"
+    DATA_PART="$WORK_DIR/data_part.img"
+    
+    # EFIパーティションイメージ（FAT16を使用 - EFIは両方サポート）
+    dd if=/dev/zero of="$EFI_PART" bs=512 count="$EFI_SIZE_SEC" status=none
+    mformat -i "$EFI_PART" -v "EFI" ::
+    
+    # DATAパーティションイメージ（FAT16を使用）
+    dd if=/dev/zero of="$DATA_PART" bs=512 count="$DATA_SIZE_SEC" status=none
+    mformat -i "$DATA_PART" -v "PCINFO" ::
+    
+    # --- EFIパーティションの構築 ---
+    mmd -i "$EFI_PART" ::/EFI
+    mmd -i "$EFI_PART" ::/EFI/BOOT
+    mmd -i "$EFI_PART" ::/boot
+    mmd -i "$EFI_PART" ::/boot/grub
+    
+    # GRUB設定 (saved_entry対応)
     cat > /tmp/grub_embed.cfg << 'GRUB_EOF'
 set gfxmode=1024x768,800x600,auto
 set gfxpayload=keep
-set timeout=5
+set timeout=0
+set default=pcinfo
+
+# grubenv を EFI パーティションから読み込み
+search --set=efipart --file /boot/grub/grubenv
+if [ -n "$efipart" ]; then
+    set env_blk="($efipart)/boot/grub/grubenv"
+    if load_env -f "$env_blk" saved_entry; then
+        set default="$saved_entry"
+    fi
+fi
+
+# データパーティションを探す
+search --set=root --file /boot/vmlinuz64
+
+menuentry "PcInfo Classic" --id pcinfo {
+    search --set=efipart --file /boot/grub/grubenv
+    set env_blk="($efipart)/boot/grub/grubenv"
+    set saved_entry=pcinfo
+    save_env -f "$env_blk" saved_entry
+    linux /boot/vmlinuz64 loglevel=3 quiet nomodeset=0 vga=794 nodhcp nozswap
+    initrd /boot/corepure64.gz
+}
+
+menuentry "Memtest86+ (Memory Test)" --id memtest {
+    search --set=efipart --file /boot/grub/grubenv
+    set env_blk="($efipart)/boot/grub/grubenv"
+    set saved_entry=pcinfo
+    save_env -f "$env_blk" saved_entry
+    chainloader ($efipart)/EFI/BOOT/memtest86.efi
+}
+GRUB_EOF
+
+    # GRUB EFI バイナリ作成
+    grub-mkstandalone \
+        --format=x86_64-efi \
+        --output="/tmp/bootx64.efi" \
+        --modules="part_gpt part_msdos fat normal echo all_video gfxterm test search search_fs_file search_label chain loadenv" \
+        "boot/grub/grub.cfg=/tmp/grub_embed.cfg" 2>/dev/null \
+    || die "Failed to build GRUB EFI"
+    
+    mcopy -i "$EFI_PART" "/tmp/bootx64.efi" ::/EFI/BOOT/
+    log "GRUB EFI bootloader created"
+    
+    # memtest86+ EFI
+    if [ -f "$WORK_DIR/memtest86plus.bin" ]; then
+        mcopy -i "$EFI_PART" "$WORK_DIR/memtest86plus.bin" ::/EFI/BOOT/memtest86.efi
+        log "memtest86+ copied to EFI partition"
+    fi
+    
+    # grubenv 初期化 (saved_entry=pcinfo)
+    grub-editenv /tmp/grubenv create
+    grub-editenv /tmp/grubenv set saved_entry=pcinfo
+    mcopy -i "$EFI_PART" /tmp/grubenv ::/boot/grub/
+    log "grubenv initialized with saved_entry=pcinfo"
+    
+    # --- データパーティションの構築 ---
+    mmd -i "$DATA_PART" ::/boot
+    mcopy -i "$DATA_PART" "$ISO_EXTRACT/boot/vmlinuz64" ::/boot/
+    mcopy -i "$DATA_PART" "$ISO_EXTRACT/boot/corepure64.gz" ::/boot/
+    log "Boot files copied to data partition"
+    
+    # パーティションイメージを結合
+    dd if="$EFI_PART" of="$OUT_IMG" bs=512 seek="$EFI_START_SEC" conv=notrunc status=none
+    dd if="$DATA_PART" of="$OUT_IMG" bs=512 seek="$DATA_START_SEC" conv=notrunc status=none
+    
+    # 一時ファイル削除
+    rm -f "$EFI_PART" "$DATA_PART" /tmp/bootx64.efi /tmp/grubenv
+    
+    log "USB image created: $OUT_IMG"
+    ls -lh "$OUT_IMG"
+    
+    # ISOも作成（互換性のため、ただしmemtest86+自動起動は非対応）
+    log "Also creating ISO for compatibility (memtest86+ requires manual selection)..."
+    
+    # GRUB EFI for ISO (読み取り専用なのでsaved_entry無し)
+    cat > /tmp/grub_iso.cfg << 'GRUB_EOF'
+set gfxmode=1024x768,800x600,auto
+set gfxpayload=keep
+set timeout=0
 set default=0
 
-# Find the device containing our ISO filesystem by searching for a known file
 search --set=root --file /boot/vmlinuz64
 
 menuentry "PcInfo Classic" {
@@ -356,29 +470,28 @@ menuentry "Memtest86+ (Memory Test)" {
 }
 GRUB_EOF
 
+    mkdir -p "$ISO_EXTRACT/EFI/BOOT"
     grub-mkstandalone \
         --format=x86_64-efi \
         --output="$ISO_EXTRACT/EFI/BOOT/bootx64.efi" \
-        --modules="part_gpt part_msdos fat iso9660 linux linux16 normal echo all_video gfxterm gfxterm_background test search search_fs_file chain" \
-        "boot/grub/grub.cfg=/tmp/grub_embed.cfg" 2>/dev/null \
-    || die "Failed to build GRUB EFI"
-
-    log "GRUB EFI bootloader created: EFI/BOOT/bootx64.efi"
-
-    # Create EFI boot image (FAT img) for El Torito EFI entry
-    # Use mtools (no loop mount needed) - image must be larger than bootx64.efi (~6MB)
+        --modules="part_gpt part_msdos fat iso9660 linux normal echo all_video gfxterm test search search_fs_file chain" \
+        "boot/grub/grub.cfg=/tmp/grub_iso.cfg" 2>/dev/null \
+    || die "Failed to build GRUB EFI for ISO"
+    
+    # memtest86+ to ISO
+    if [ -f "$WORK_DIR/memtest86plus.bin" ]; then
+        cp "$WORK_DIR/memtest86plus.bin" "$ISO_EXTRACT/EFI/BOOT/memtest86.efi"
+        cp "$WORK_DIR/memtest86plus.bin" "$ISO_EXTRACT/boot/memtest86plus.bin"
+    fi
+    
     EFI_IMG="$ISO_EXTRACT/boot/efi.img"
-    EFI_SIZE_MB=12  # 12MB: enough for bootx64.efi (~6MB) + memtest86.efi with FAT16
+    EFI_SIZE_MB=12
     dd if=/dev/zero of="$EFI_IMG" bs=1M count="$EFI_SIZE_MB" 2>/dev/null
     mformat -i "$EFI_IMG" :: 2>/dev/null
     mmd -i "$EFI_IMG" ::/EFI ::/EFI/BOOT 2>/dev/null
-    mcopy -i "$EFI_IMG" "$ISO_EXTRACT/EFI/BOOT/bootx64.efi" ::/EFI/BOOT/ 2>/dev/null \
-        && log "EFI files copied into efi.img via mtools" \
-        || die "mcopy failed: cannot create EFI boot image"
-    # memtest86も追加
+    mcopy -i "$EFI_IMG" "$ISO_EXTRACT/EFI/BOOT/bootx64.efi" ::/EFI/BOOT/ 2>/dev/null
     if [ -f "$ISO_EXTRACT/EFI/BOOT/memtest86.efi" ]; then
-        mcopy -i "$EFI_IMG" "$ISO_EXTRACT/EFI/BOOT/memtest86.efi" ::/EFI/BOOT/ 2>/dev/null \
-            && log "memtest86.efi added to efi.img"
+        mcopy -i "$EFI_IMG" "$ISO_EXTRACT/EFI/BOOT/memtest86.efi" ::/EFI/BOOT/ 2>/dev/null
     fi
 
     # Build dual-boot ISO (Legacy BIOS via isolinux + UEFI via GRUB EFI)
@@ -413,22 +526,24 @@ GRUB_EOF
 # Step 5: USB write instructions
 # ============================================================
 show_usb_instructions() {
+    OUT_IMG="${OUT_ISO%.iso}.img"
     echo ""
     echo "============================================"
-    echo "  ISO Build Complete!"
+    echo "  Build Complete!"
     echo "============================================"
     echo ""
-    echo "  Output: $OUT_ISO"
+    echo "  推奨: USB Image (memtest86+ 自動起動対応)"
+    echo "    Output: $OUT_IMG"
     echo ""
-    echo "  Write to USB (Linux/Mac):"
-    echo "    sudo dd if=$OUT_ISO of=/dev/sdX bs=4M status=progress && sync"
-    echo "    (replace /dev/sdX with your USB device)"
+    echo "    Write to USB (Linux/Mac):"
+    echo "      sudo dd if=$OUT_IMG of=/dev/sdX bs=4M status=progress && sync"
     echo ""
-    echo "  Write to USB (Windows):"
-    echo "    Use Rufus: https://rufus.ie/"
-    echo "    Select DD mode when prompted."
+    echo "    Write to USB (Windows):"
+    echo "      Use Etcher: https://etcher.balena.io/"
     echo ""
-    echo "  Boot the USB, then pcinfo.sh runs automatically."
+    echo "  互換用: ISO (Ventoy対応、memtest86+手動選択)"
+    echo "    Output: $OUT_ISO"
+    echo ""
     echo "============================================"
 }
 
