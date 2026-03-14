@@ -42,7 +42,7 @@ printf '\033[2J\033[H' > "$TTY" 2>/dev/null
     printf "\n${BOLD}${CYAN}[メモリテスト]${RESET}\n\n"
     printf "  memtest86+ によりメモリをテストします。\n\n"
     printf "  - 再起動後、自動的にテストを開始します。\n"
-    printf "  - テスト終了後は Esc で PCInfo classic に自動復帰します。\n\n"
+    printf "  - テスト終了後は Esc で PcInfo classic に戻ります。\n\n"
     printf "  Enter: 開始   q: キャンセル\n"
 } | "$FBPRINT" "$FONT" "$FB"
 

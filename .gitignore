@@ -21,3 +21,13 @@ Thumbs.db
 
 .devcontainer/*
 .github/*
+
+# Alpine作業ディレクトリ
+build/work_alpine/
+build/backup/
+
+# テスト用イメージ
+build/pcinfo-alpine.img
+build/pcinfo-test-alpine.img
+build/pcinfo-keyboard-test.img
+build/pcinfo-classic.img
