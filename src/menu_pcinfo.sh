@@ -1,6 +1,6 @@
 #!/bin/sh
-# menu_pcinfo.sh - PC情報画面
+# menu_pcinfo.sh - PC Info screen
 
-. /opt/common.sh
+. /opt/pcinfo/common.sh
 
-/opt/pcinfo.sh 2>/dev/null | show_paged
+/opt/pcinfo/pcinfo.sh 2>/dev/null | show_paged

@@ -1,45 +1,41 @@
 #!/bin/sh
-# menu.sh - トップメニュー（起動時に profile.d から呼ばれる）
+# menu.sh - Top menu (called from /etc/local.d/pcinfo.start at boot)
 
-. /opt/common.sh
+. /opt/pcinfo/common.sh
 
-# fbprint が使えない場合のフォールバック
-if [ ! -e "$FB" ] || [ ! -x "$FBPRINT" ]; then
-    /opt/pcinfo.sh
-    printf "Press any key to exit..." > "$TTY"
-    read_key
-    return
-fi
+show_menu() {
+    printf '\033[2J\033[H' > "$TTY" 2>/dev/null
+    printf ' ____      ___        __          ____ _               _      \n' > "$TTY"
+    printf '|  _ \\___|_ _|_ __  / _| ___    / ___| | __ _ ___ ___(_) ___ \n' > "$TTY"
+    printf '| |_) / __|| || '"'"'_ \\| |_ / _ \\  | |   | |/ _` / __/ __| |/ __|\n' > "$TTY"
+    printf '|  __/ (__ | || | | |  _| (_) | | |___| | (_| \\__ \\__ \\ | (__ \n' > "$TTY"
+    printf '|_|   \\___|___|_| |_|_|  \\___/   \\____|_|\\__,_|___/___/_|\\___|\n' > "$TTY"
+    printf '                                        Powered by Alpine Linux\n' > "$TTY"
+    printf '\n' > "$TTY"
+    printf '  1.  PC Info\n' > "$TTY"
+    printf '\n' > "$TTY"
+    printf '  2.  Memory Test\n' > "$TTY"
+    printf '\n' > "$TTY"
+    printf '  3.  GPU Test\n' > "$TTY"
+    printf '\n' > "$TTY"
+    printf '  4.  Storage Health\n' > "$TTY"
+    printf '\n' > "$TTY"
+    printf '  5.  Network Setup\n' > "$TTY"
+    printf '\n' > "$TTY"
+    printf '  q.  Shutdown\n' > "$TTY"
+    printf '\n  Select [1-5/q]: ' > "$TTY"
+}
 
 while true; do
-    printf '\033[2J\033[H' > "$TTY" 2>/dev/null
-    {
-        printf " ____      ___        __          ____ _               _      \n"
-        printf "|  _ \\___|_ _|_ __  / _| ___    / ___| | __ _ ___ ___(_) ___ \n"
-        printf "| |_) / __|| || '_ \\| |_ / _ \\  | |   | |/ _\` / __/ __| |/ __|\n"
-        printf "|  __/ (__ | || | | |  _| (_) | | |___| | (_| \\__ \\__ \\ | (__ \n"
-        printf "|_|   \\___|___|_| |_|_|  \\___/   \\____|_|\\__,_|___/___/_|\\___|\n"
-        printf "                                      Powered by Tiny Core Linux\n"
-        printf "\n"
-        printf "  1. PC情報\n"
-        printf "\n"
-        printf "  2. メモリテスト\n"
-        printf "\n"
-        printf "  3. GPUテスト\n"
-        printf "\n"
-        printf "  4. ストレージ情報\n"
-        printf "\n"
-        printf "  q. シャットダウン\n"
-        printf "\n  Select [1-4/q]: "
-    } | "$FBPRINT" "$FONT" "$FB"
-
+    show_menu
     read_key
 
     case "$key" in
-        1) /opt/menu_pcinfo.sh ;;
-        2) /opt/menu_memtest.sh ;;
-        3) /opt/menu_gpu.sh ;;
-        4) /opt/menu_storage.sh ;;
+        1) /opt/pcinfo/menu_pcinfo.sh ;;
+        2) /opt/pcinfo/menu_memtest.sh ;;
+        3) /opt/pcinfo/menu_gpu.sh ;;
+        4) /opt/pcinfo/menu_storage.sh ;;
+        5) /opt/pcinfo/menu_network.sh ;;
         q|Q) break ;;
     esac
 done

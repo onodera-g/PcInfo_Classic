@@ -1,15 +1,21 @@
 #!/bin/sh
-# common.sh - 共通変数・関数（全メニューから . で読み込む）
+# common.sh - Shared variables and functions (sourced by all menu scripts)
 
-FBPRINT=/usr/local/bin/fbprint
-FONT=/usr/share/consolefonts/unifont_ja.psf.gz
-FB=/dev/fb0
 TTY=/dev/tty1
-LINES_PER_PAGE=43
+LINES_PER_PAGE=40
 
-# 1文字即時入力: raw モードで1バイト読み、割り込み時も必ず stty を復元する
+# ANSI colors
+CYAN='\033[0;36m'
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
+BOLD='\033[1m'
+RESET='\033[0m'
+
+SEP='----------------------------------------'
+
+# Read a single key from TTY (raw mode)
 read_key() {
-    # TTYが有効かチェック（シャットダウン時のエラー回避）
     if ! [ -c "$TTY" ] || ! stty -g < "$TTY" > /dev/null 2>&1; then
         key=""
         return 1
@@ -22,8 +28,8 @@ read_key() {
     trap - INT TERM
 }
 
-# stdin の内容を LINES_PER_PAGE 行ずつページ表示する
-# 途中ページ: Enter で次へ / 最終ページ: q でトップに戻る
+# Display stdin content page by page (LINES_PER_PAGE lines per page)
+# Enter: next page / q: return to top on last page
 show_paged() {
     _content=$(cat)
     _total=$(printf '%s\n' "$_content" | wc -l)
@@ -33,15 +39,37 @@ show_paged() {
         printf '\033[2J\033[H' > "$TTY" 2>/dev/null
         _chunk=$(printf '%s\n' "$_content" | sed -n "${_start},${_end}p")
         if [ "$_end" -lt "$_total" ]; then
-            { printf '%s\n' "$_chunk"; printf '\n----------------------------------------\nEnterで続きを表示\n'; } | "$FBPRINT" "$FONT" "$FB"
+            printf '%s\n' "$_chunk" > "$TTY"
+            printf '\n%s\nPress Enter for more...\n' "$SEP" > "$TTY"
             read -r _dummy < "$TTY"
             _start=$((_end + 1))
         else
-            { printf '%s\n' "$_chunk"; printf '\n----------------------------------------\nq でトップに戻る\n'; } | "$FBPRINT" "$FONT" "$FB"
+            printf '%s\n' "$_chunk" > "$TTY"
+            printf '\n%s\nPress q to return to menu\n' "$SEP" > "$TTY"
             while true; do
                 read_key
                 case "$key" in q|Q|'') return ;; esac
             done
         fi
     done
+}
+
+# Mount USB by label (PCINFO) to /mnt/usb
+USB_MOUNT="/mnt/usb"
+mount_usb() {
+    if mountpoint -q "$USB_MOUNT" 2>/dev/null; then
+        return 0
+    fi
+    mkdir -p "$USB_MOUNT"
+    mount -t vfat -L PCINFO "$USB_MOUNT" 2>/dev/null && return 0
+    # Fallback: try common USB device paths
+    for dev in /dev/sda /dev/sdb /dev/sdc /dev/sdd; do
+        [ -b "$dev" ] || continue
+        mount -t vfat "$dev" "$USB_MOUNT" 2>/dev/null && return 0
+    done
+    return 1
+}
+
+unmount_usb() {
+    umount "$USB_MOUNT" 2>/dev/null || true
 }

@@ -1,18 +1,17 @@
-# ビルド成果物
+# Build artifacts (work dirs, not committed)
 build/work/
-build/pcinfo-classic.iso
-build/test_result.log
+build/work_alpine/
+build/backup/
 
-# コンパイル済みバイナリ (ソースからビルドする)
-build/fbprint
-build/meminfo
+# Build output: .img is large (tracked separately or excluded)
+build/pcinfo-classic.img
 
-# ログ・一時ファイル
+# Logs / temp
 wget-log*
 test.txt
 *.log
 
-# スクリーンショット
+# Screenshots
 *.png
 
 # OS
@@ -21,13 +20,3 @@ Thumbs.db
 
 .devcontainer/*
 .github/*
-
-# Alpine作業ディレクトリ
-build/work_alpine/
-build/backup/
-
-# テスト用イメージ
-build/pcinfo-alpine.img
-build/pcinfo-test-alpine.img
-build/pcinfo-keyboard-test.img
-build/pcinfo-classic.img

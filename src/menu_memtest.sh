@@ -1,50 +1,38 @@
 #!/bin/sh
-# menu_memtest.sh - メモリテスト画面
+# menu_memtest.sh - Memory Test screen
 
-. /opt/common.sh
+. /opt/pcinfo/common.sh
 
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-RESET='\033[0m'
-
-# grubenvにsaved_entry=memtestを設定してmemtest86+を自動起動
+# Set next UEFI boot entry to memtest via grub.cfg on USB
 set_next_boot_memtest() {
-    # EFIパーティション（ラベル: EFI）をマウントしてgrubenvを書き換え
-    for dev in /dev/sd[a-z][0-9]* /dev/nvme*p[0-9]*; do
-        [ -b "$dev" ] || continue
-        label=$(blkid -s LABEL -o value "$dev" 2>/dev/null)
-        if [ "$label" = "EFI" ]; then
-            mnt="/tmp/efi_mnt_$$"
-            mkdir -p "$mnt"
-            if mount -o rw "$dev" "$mnt" 2>/dev/null; then
-                grubenv="$mnt/boot/grub/grubenv"
-                if [ -f "$grubenv" ]; then
-                    # grubenv書き換え（1024バイト固定、#でパディング）
-                    dd if=/dev/zero bs=1024 count=1 2>/dev/null | tr '\000' '#' > "$grubenv"
-                    printf '# GRUB Environment Block\nsaved_entry=memtest\n' | \
-                        dd of="$grubenv" conv=notrunc 2>/dev/null
-                    sync
-                    umount "$mnt" 2>/dev/null
-                    rmdir "$mnt" 2>/dev/null
-                    return 0
-                fi
-                umount "$mnt" 2>/dev/null
-            fi
-            rmdir "$mnt" 2>/dev/null
-        fi
-    done
-    return 1
+    if ! mount_usb; then
+        return 1
+    fi
+
+    local grubenv="$USB_MOUNT/EFI/BOOT/grubenv"
+    if [ ! -f "$grubenv" ]; then
+        unmount_usb
+        return 1
+    fi
+
+    # Write 1024-byte grubenv block
+    dd if=/dev/zero bs=1024 count=1 2>/dev/null | tr '\000' '#' > "$grubenv"
+    printf '# GRUB Environment Block\nsaved_entry=memtest\n' | \
+        dd of="$grubenv" conv=notrunc 2>/dev/null
+    sync
+    unmount_usb
+    return 0
 }
 
-# メイン処理
+# Main
 printf '\033[2J\033[H' > "$TTY" 2>/dev/null
 {
-    printf "\n${BOLD}${CYAN}[メモリテスト]${RESET}\n\n"
-    printf "  memtest86+ によりメモリをテストします。\n\n"
-    printf "  - 再起動後、自動的にテストを開始します。\n"
-    printf "  - テスト終了後は Esc で PcInfo classic に戻ります。\n\n"
-    printf "  Enter: 開始   q: キャンセル\n"
-} | "$FBPRINT" "$FONT" "$FB"
+    printf "\n${BOLD}${CYAN}[Memory Test]${RESET}\n\n"
+    printf "  Run Memtest86+ to test system RAM.\n\n"
+    printf "  - System will reboot into Memtest86+.\n"
+    printf "  - After test, press Esc to return to PCInfo.\n\n"
+    printf "  Enter: Start   q: Cancel\n"
+} > "$TTY"
 
 while true; do
     read_key
@@ -52,8 +40,8 @@ while true; do
         q|Q) break ;;
         ''|' ')
             printf '\033[2J\033[H' > "$TTY" 2>/dev/null
-            printf "\n${BOLD}${CYAN}[メモリテスト]${RESET}\n\n起動準備中...\n" | "$FBPRINT" "$FONT" "$FB"
-            
+            printf "\n${BOLD}${CYAN}[Memory Test]${RESET}\n\nPreparing...\n" > "$TTY"
+
             if set_next_boot_memtest; then
                 sleep 1
                 reboot
@@ -61,11 +49,12 @@ while true; do
             else
                 printf '\033[2J\033[H' > "$TTY" 2>/dev/null
                 {
-                    printf "\n${BOLD}${CYAN}[メモリテスト]${RESET}\n\n"
-                    printf "自動起動に対応していません。\n"
-                    printf "(USBイメージ形式で書き込んでください)\n\n"
-                    printf "q: 戻る\n"
-                } | "$FBPRINT" "$FONT" "$FB"
+                    printf "\n${BOLD}${CYAN}[Memory Test]${RESET}\n\n"
+                    printf "${YELLOW}Auto-boot not available.${RESET}\n\n"
+                    printf "Please reboot manually and select\n"
+                    printf "\"Memtest86+\" from the boot menu.\n\n"
+                    printf "${SEP}\nPress q to return\n"
+                } > "$TTY"
                 while true; do read_key; case "$key" in q|Q) break 2 ;; esac; done
             fi
             ;;
