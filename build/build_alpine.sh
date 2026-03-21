@@ -315,7 +315,7 @@ EOF
     grub-mkstandalone \
         -O x86_64-efi \
         -o "$efi_out" \
-        --modules="fat linux normal boot chain configfile echo ls search search_label search_fs_uuid efi_gop efi_uga" \
+        --modules="fat linux linuxefi normal boot chain configfile echo ls search search_label search_fs_uuid efi_gop efi_uga part_gpt part_msdos" \
         "boot/grub/grub.cfg=${stub_cfg}" \
         2>/dev/null
 
@@ -399,8 +399,8 @@ if [ -f (\$root)/EFI/BOOT/grubenv ]; then
 fi
 
 menuentry "PCInfo Classic" --id pcinfo {
-    linux  /boot/vmlinuz-lts modules=loop,squashfs,sd-mod,usb-storage quiet alpine_dev=LABEL=${USB_LABEL}:vfat
-    initrd /boot/initramfs-lts
+    linuxefi  /boot/vmlinuz-lts modules=loop,squashfs,sd-mod,usb-storage quiet alpine_dev=LABEL=${USB_LABEL}:vfat
+    initrdefi /boot/initramfs-lts
 }
 
 GRUB_EOF
