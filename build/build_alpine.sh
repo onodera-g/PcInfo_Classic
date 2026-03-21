@@ -32,7 +32,7 @@ IMG_SIZE_MB=512
 USB_LABEL="PCINFO"
 
 # ---- Logging ----
-log()   { echo "[build] $*"; }
+log()   { echo "[build] $*" >&2; }
 warn()  { echo "[WARN]  $*" >&2; }
 error() { echo "[ERROR] $*" >&2; exit 1; }
 
@@ -62,6 +62,20 @@ download() {
     fi
     log "Downloading $(basename "$dest")..."
     wget -q --show-progress -O "$dest" "$url" || error "Download failed: $url"
+}
+
+# Download helper that returns 1 on failure (does NOT exit)
+download_optional() {
+    local url="$1" dest="$2"
+    if [ -f "$dest" ] && [ -s "$dest" ]; then
+        log "Cached: $(basename "$dest")"
+        return 0
+    fi
+    rm -f "$dest"
+    log "Downloading $(basename "$dest")..."
+    wget -q --show-progress -O "$dest" "$url" 2>/dev/null && [ -s "$dest" ] && return 0
+    rm -f "$dest"
+    return 1
 }
 
 # Download a single .apk from Alpine repository (with retry on mirror)
@@ -106,7 +120,7 @@ download_apk() {
     fi
 
     local dest="$dest_dir/$apk_file"
-    if [ -f "$dest" ]; then
+    if [ -s "$dest" ]; then
         log "Cached apk: $apk_file"
         return 0
     fi
@@ -114,7 +128,7 @@ download_apk() {
     log "Downloading apk: $apk_file"
     wget -q -O "$dest" "${ALPINE_REPO_MAIN}/${apk_file}" 2>/dev/null || \
     wget -q -O "$dest" "${ALPINE_REPO_COMM}/${apk_file}" 2>/dev/null || \
-    { warn "Cannot download: $apk_file"; return 1; }
+    { rm -f "$dest"; warn "Cannot download: $apk_file"; return 1; }
 }
 
 # ---- Step 1: Download Alpine netboot files ----
@@ -136,16 +150,37 @@ download_alpine_netboot() {
 download_memtest() {
     log "=== Downloading Memtest86+ ==="
     local mt="$WORK_DIR/memtest.efi"
-    download "https://memtest.org/download/v7.20/mt86plus_7.20_64.grub.efi.zip" \
-        "$WORK_DIR/memtest.zip" 2>/dev/null || \
-    download "https://memtest.org/download/v7.00/mt86plus_7.00_64.grub.efi" \
-        "$mt" 2>/dev/null || \
-    { warn "memtest86+ download failed - memory test will be unavailable"; return 0; }
 
-    if [ -f "$WORK_DIR/memtest.zip" ] && [ ! -f "$mt" ]; then
-        unzip -q -o "$WORK_DIR/memtest.zip" -d "$WORK_DIR/memtest_unzip/" 2>/dev/null || true
-        find "$WORK_DIR/memtest_unzip" -name "*.efi" | head -1 | xargs -I{} cp {} "$mt" 2>/dev/null || true
+    # Already have it?
+    if [ -f "$mt" ] && [ -s "$mt" ]; then
+        log "Cached: memtest.efi"
+        return 0
     fi
+
+    # Try zip first (v7.20+)
+    local zip="$WORK_DIR/memtest.zip"
+    if download_optional \
+        "https://memtest.org/download/v7.20/mt86plus_7.20_64.grub.efi.zip" "$zip"; then
+        mkdir -p "$WORK_DIR/memtest_unzip"
+        unzip -q -o "$zip" -d "$WORK_DIR/memtest_unzip/" 2>/dev/null || true
+        local efi
+        efi=$(find "$WORK_DIR/memtest_unzip" -name "*.efi" 2>/dev/null | head -1)
+        if [ -n "$efi" ]; then
+            cp "$efi" "$mt"
+            log "  memtest86+ extracted: $(basename "$efi")"
+            return 0
+        fi
+    fi
+
+    # Try direct EFI (v7.00)
+    if download_optional \
+        "https://memtest.org/download/v7.00/mt86plus_7.00_64.grub.efi" "$mt"; then
+        log "  memtest86+ downloaded (v7.00)"
+        return 0
+    fi
+
+    warn "memtest86+ download failed - memory test will be unavailable (skipped)"
+    return 0
 }
 
 # ---- Step 3: Download required .apk packages for offline use ----
@@ -215,13 +250,26 @@ EOF
 USB_MNT="/mnt/usb"
 mkdir -p "$USB_MNT"
 
-# Try to mount USB by label
-mount -t vfat -L PCINFO "$USB_MNT" 2>/dev/null || \
-    mount -t vfat /dev/sda "$USB_MNT" 2>/dev/null || \
-    mount -t vfat /dev/sdb "$USB_MNT" 2>/dev/null || true
+# Alpine diskless may have already mounted the USB at /media/usb
+if mountpoint -q /media/usb 2>/dev/null; then
+    mount --bind /media/usb "$USB_MNT" 2>/dev/null || USB_MNT="/media/usb"
+else
+    # Fallback: try to mount by label or device
+    mount -t vfat -L PCINFO "$USB_MNT" 2>/dev/null || \
+        mount -t vfat /dev/sda "$USB_MNT" 2>/dev/null || \
+        mount -t vfat /dev/sdb "$USB_MNT" 2>/dev/null || true
+fi
 
+# Install non-empty APK files from USB cache (offline)
 if mountpoint -q "$USB_MNT" 2>/dev/null && [ -d "$USB_MNT/apkcache" ]; then
-    apk add --allow-untrusted --no-network "$USB_MNT"/apkcache/*.apk 2>/dev/null || true
+    apks=""
+    for apk in "$USB_MNT"/apkcache/*.apk; do
+        [ -s "$apk" ] && apks="$apks $apk"
+    done
+    if [ -n "$apks" ]; then
+        # shellcheck disable=SC2086
+        apk add --allow-untrusted --no-network $apks 2>/dev/null || true
+    fi
 fi
 
 # Keep USB mounted for driver access (menu_gpu.sh uses /mnt/usb)
@@ -319,14 +367,18 @@ build_fat32_image() {
     mcopy -i "$OUTPUT_IMG" "$ovl_tar" ::/"$(basename "$ovl_tar")"
     log "  apkovl copied"
 
-    # Copy APK cache
+    # Copy APK cache (skip 0-byte files from failed downloads)
     local apk_count=0
     for apk in "$WORK_DIR/apkcache/"*.apk; do
-        [ -f "$apk" ] || continue
+        [ -s "$apk" ] || continue
         mcopy -i "$OUTPUT_IMG" "$apk" ::/apkcache/"$(basename "$apk")"
         apk_count=$((apk_count + 1))
     done
-    log "  APK cache: $apk_count package(s) copied"
+    if [ "$apk_count" -eq 0 ]; then
+        log "  APK cache: none (network unavailable during build - packages will be fetched on first boot)"
+    else
+        log "  APK cache: $apk_count package(s) copied"
+    fi
 
     # EFI bootloader
     mcopy -i "$OUTPUT_IMG" "$efi_bin" ::/EFI/BOOT/BOOTX64.EFI
@@ -419,26 +471,14 @@ SYSLINUX_MEMTEST_EOF
 install_syslinux() {
     log "=== Installing syslinux (BIOS boot) ==="
 
-    # Write MBR boot record
-    local mbr_bin=""
-    for f in /usr/lib/syslinux/mbr/mbr.bin /usr/lib/syslinux/mbr.bin /usr/share/syslinux/mbr.bin; do
-        [ -f "$f" ] && mbr_bin="$f" && break
-    done
-
-    if [ -z "$mbr_bin" ]; then
-        warn "syslinux mbr.bin not found - BIOS boot may not work"
-        return 0
-    fi
-
-    # Write MBR (first 440 bytes = boot code, preserve FAT BPB at offset 446+)
-    dd if="$mbr_bin" of="$OUTPUT_IMG" bs=440 count=1 conv=notrunc 2>/dev/null
-    log "  MBR written from $mbr_bin"
-
-    # Install syslinux boot sector into FAT32 image
+    # For a non-partitioned FAT32 image, syslinux installs its boot code
+    # directly into the FAT32 VBR (sector 0).  BIOS executes sector 0
+    # directly on a non-partitioned USB, so no mbr.bin is needed.
     if syslinux --install "$OUTPUT_IMG" 2>/dev/null; then
-        log "  syslinux boot sector installed"
+        log "  syslinux boot sector installed (BIOS boot ready)"
     else
-        warn "  syslinux install may have failed (BIOS boot might not work)"
+        warn "  syslinux install failed - BIOS boot may not work"
+        warn "  (UEFI boot via GRUB is still available)"
     fi
 }
 
