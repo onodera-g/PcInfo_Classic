@@ -84,34 +84,41 @@ download_apk() {
     local apk_file
     # Find latest version in APKINDEX
     local apkindex="$WORK_DIR/APKINDEX_main.tar.gz"
-    if [ ! -f "$apkindex" ]; then
+    if [ ! -s "$apkindex" ]; then
         wget -q -O "$apkindex" "${ALPINE_REPO_MAIN}/APKINDEX.tar.gz" || \
-            wget -q -O "$apkindex" "${ALPINE_REPO_COMM}/APKINDEX.tar.gz" || \
             { warn "Cannot fetch APKINDEX"; return 1; }
     fi
 
     # Extract package filename from APKINDEX
+    # Alpine APK filenames on server: {name}-{version}.apk (no arch in filename,
+    # arch is in the URL path already)
     apk_file=$(tar -xOf "$apkindex" APKINDEX 2>/dev/null | \
         awk -v pkg="$pkg" '
           /^P:/{name=$0; sub(/^P:/,"",name)}
           /^V:/{ver=$0; sub(/^V:/,"",ver)}
-          /^A:/{arch=$0; sub(/^A:/,"",arch)}
-          /^$/{if(name==pkg) print name"-"ver"."arch".apk"; name=""; ver=""; arch=""}
+          /^$/{if(name==pkg) print name"-"ver".apk"; name=""; ver=""}
         ' | head -1)
 
     if [ -z "$apk_file" ]; then
         # Try community repo
         local apkindex2="$WORK_DIR/APKINDEX_comm.tar.gz"
-        if [ ! -f "$apkindex2" ]; then
+        if [ ! -s "$apkindex2" ]; then
             wget -q -O "$apkindex2" "${ALPINE_REPO_COMM}/APKINDEX.tar.gz" || return 1
         fi
         apk_file=$(tar -xOf "$apkindex2" APKINDEX 2>/dev/null | \
             awk -v pkg="$pkg" '
               /^P:/{name=$0; sub(/^P:/,"",name)}
               /^V:/{ver=$0; sub(/^V:/,"",ver)}
-              /^A:/{arch=$0; sub(/^A:/,"",arch)}
-              /^$/{if(name==pkg) print name"-"ver"."arch".apk"; name=""; ver=""; arch=""}
+              /^$/{if(name==pkg) print name"-"ver".apk"; name=""; ver=""}
             ' | head -1)
+        if [ -n "$apk_file" ]; then
+            local dest="$dest_dir/$apk_file"
+            [ -s "$dest" ] && { log "Cached apk: $apk_file"; return 0; }
+            log "Downloading apk: $apk_file"
+            wget -q -O "$dest" "${ALPINE_REPO_COMM}/${apk_file}" 2>/dev/null || \
+                { rm -f "$dest"; warn "Cannot download: $apk_file"; return 1; }
+            return 0
+        fi
     fi
 
     if [ -z "$apk_file" ]; then
@@ -205,19 +212,49 @@ download_memtest() {
     return 0
 }
 
-# ---- Step 3: Download required .apk packages for offline use ----
-download_apkcache() {
-    log "=== Downloading offline APK cache ==="
-    local cache_dir="$WORK_DIR/apkcache"
-    mkdir -p "$cache_dir"
+# ---- Step 3: Build apks/ directory for diskless boot ----
+# Alpine diskless init installs packages from alpine_dev/apks/ at boot.
+# We need:  1) base packages from the standard ISO
+#           2) additional tools required by PCInfo scripts
+build_apks_dir() {
+    log "=== Building apks/ directory ==="
+    local apks_dir="$WORK_DIR/apks/x86_64"
+    mkdir -p "$apks_dir"
 
-    # Required packages for PCInfo operation
-    local pkgs="dialog smartmontools nvme-cli pciutils wireless-tools wpa_supplicant iw \
+    local iso="$WORK_DIR/alpine-standard.iso"
+    [ -s "$iso" ] || error "Alpine ISO not found: $iso"
+
+    # Extract base packages from ISO (APKINDEX + all .apk files)
+    if [ ! -s "$apks_dir/APKINDEX.tar.gz" ]; then
+        log "  Extracting base packages from ISO..."
+        7z e "$iso" -o"$apks_dir" "apks/x86_64/*" -y > /dev/null 2>&1
+        log "  Base packages extracted: $(ls "$apks_dir"/*.apk 2>/dev/null | wc -l) packages"
+    else
+        log "  Base packages cached: $(ls "$apks_dir"/*.apk 2>/dev/null | wc -l) packages"
+    fi
+
+    # Download additional packages needed by PCInfo
+    log "  Downloading additional packages..."
+    local pkgs="bash dialog smartmontools nvme-cli pciutils wireless-tools wpa_supplicant iw \
                 hdparm util-linux blkid dmidecode eudev"
-
+    local ok=0 fail=0
     for pkg in $pkgs; do
-        download_apk "$pkg" "$cache_dir" || warn "Could not pre-cache: $pkg"
+        if download_apk "$pkg" "$apks_dir"; then
+            ok=$((ok + 1))
+        else
+            warn "Could not fetch: $pkg (may need internet on first boot)"
+            fail=$((fail + 1))
+        fi
     done
+    log "  Additional packages: $ok ok, $fail failed"
+
+    # Mark as boot repository
+    touch "$WORK_DIR/apks/.boot_repository"
+
+    # Rebuild APKINDEX to include our downloaded packages
+    # (Alpine's apk tool will use the existing APKINDEX.tar.gz,
+    #  new packages are found by apk add --allow-untrusted)
+    log "  apks/ ready: $(ls "$apks_dir"/*.apk 2>/dev/null | wc -l) total packages"
 }
 
 # ---- Step 4: Create apkovl overlay ----
@@ -265,36 +302,50 @@ ${ALPINE_MIRROR}/v${ALPINE_VER}/main
 ${ALPINE_MIRROR}/v${ALPINE_VER}/community
 EOF
 
-    # Startup script: install packages from USB apkcache
+    # APK world file: ONLY packages available in the standard ISO's apks/ directory.
+    # 'alpine-base' is already hardcoded in Alpine's init, so only add ISO-included extras.
+    # Additional tools (dialog, smartmontools, etc.) are installed by 00-pcinfo-setup.start
+    # AFTER boot using the pre-downloaded .apk files in USB:/apks/x86_64/.
+    cat > "$ovl_dir/etc/apk/world" << 'EOF'
+alpine-base
+wpa_supplicant
+EOF
+
+    # Startup script: install additional tools from USB then keep USB accessible
     cat > "$ovl_dir/etc/local.d/00-pcinfo-setup.start" << 'SETUP_EOF'
 #!/bin/sh
-# Install required packages from USB apkcache (offline)
+# Install PCInfo tools from pre-downloaded APKs on USB, then mount USB for GPU driver access.
 USB_MNT="/mnt/usb"
 mkdir -p "$USB_MNT"
 
-# Alpine diskless may have already mounted the USB at /media/usb
-if mountpoint -q /media/usb 2>/dev/null; then
-    mount --bind /media/usb "$USB_MNT" 2>/dev/null || USB_MNT="/media/usb"
-else
-    # Fallback: try to mount by label or device
+# Find where Alpine has already mounted the USB
+for mp in /media/usb /media/sda /media/sdb /media/mmcblk0p1; do
+    if mountpoint -q "$mp" 2>/dev/null; then
+        mount --bind "$mp" "$USB_MNT" 2>/dev/null && break
+    fi
+done
+
+# Fallback: try to mount by label or device
+if ! mountpoint -q "$USB_MNT" 2>/dev/null; then
     mount -t vfat -L PCINFO "$USB_MNT" 2>/dev/null || \
         mount -t vfat /dev/sda "$USB_MNT" 2>/dev/null || \
         mount -t vfat /dev/sdb "$USB_MNT" 2>/dev/null || true
 fi
 
-# Install non-empty APK files from USB cache (offline)
-if mountpoint -q "$USB_MNT" 2>/dev/null && [ -d "$USB_MNT/apkcache" ]; then
-    apks=""
-    for apk in "$USB_MNT"/apkcache/*.apk; do
-        [ -s "$apk" ] && apks="$apks $apk"
+# Install pre-downloaded .apk files directly (bypass APKINDEX lookup)
+APK_DIR="$USB_MNT/apks/x86_64"
+if mountpoint -q "$USB_MNT" 2>/dev/null && [ -d "$APK_DIR" ]; then
+    pkgs=""
+    for f in bash dialog smartmontools nvme-cli pciutils wireless-tools iw hdparm util-linux blkid dmidecode eudev; do
+        found=$(find "$APK_DIR" -name "${f}-[0-9]*.apk" 2>/dev/null | head -1)
+        [ -n "$found" ] && pkgs="$pkgs $found"
     done
-    if [ -n "$apks" ]; then
+    if [ -n "$pkgs" ]; then
         # shellcheck disable=SC2086
-        apk add --allow-untrusted --no-network $apks 2>/dev/null || true
+        apk add --allow-untrusted --no-network $pkgs 2>/dev/null || true
     fi
 fi
 
-# Keep USB mounted for driver access (menu_gpu.sh uses /mnt/usb)
 exit 0
 SETUP_EOF
     chmod +x "$ovl_dir/etc/local.d/00-pcinfo-setup.start"
@@ -367,7 +418,8 @@ build_fat32_image() {
     mmd -i "$OUTPUT_IMG" ::/EFI          2>/dev/null || true
     mmd -i "$OUTPUT_IMG" ::/EFI/BOOT     2>/dev/null || true
     mmd -i "$OUTPUT_IMG" ::/boot         2>/dev/null || true
-    mmd -i "$OUTPUT_IMG" ::/apkcache     2>/dev/null || true
+    mmd -i "$OUTPUT_IMG" ::/apks         2>/dev/null || true
+    mmd -i "$OUTPUT_IMG" ::/apks/x86_64  2>/dev/null || true
     mmd -i "$OUTPUT_IMG" ::/drivers      2>/dev/null || true
     mmd -i "$OUTPUT_IMG" ::/drivers/nvidia 2>/dev/null || true
     mmd -i "$OUTPUT_IMG" ::/drivers/amd  2>/dev/null || true
@@ -389,18 +441,20 @@ build_fat32_image() {
     mcopy -i "$OUTPUT_IMG" "$ovl_tar" ::/"$(basename "$ovl_tar")"
     log "  apkovl copied"
 
-    # Copy APK cache (skip 0-byte files from failed downloads)
+    # Copy apks/ directory (base system + tools for diskless boot)
     local apk_count=0
-    for apk in "$WORK_DIR/apkcache/"*.apk; do
+    if [ -s "$WORK_DIR/apks/.boot_repository" ]; then
+        mcopy -i "$OUTPUT_IMG" "$WORK_DIR/apks/.boot_repository" ::/apks/.boot_repository
+    fi
+    for apk in "$WORK_DIR/apks/x86_64/"*.apk; do
         [ -s "$apk" ] || continue
-        mcopy -i "$OUTPUT_IMG" "$apk" ::/apkcache/"$(basename "$apk")"
+        mcopy -i "$OUTPUT_IMG" "$apk" ::/apks/x86_64/"$(basename "$apk")"
         apk_count=$((apk_count + 1))
     done
-    if [ "$apk_count" -eq 0 ]; then
-        log "  APK cache: none (network unavailable during build - packages will be fetched on first boot)"
-    else
-        log "  APK cache: $apk_count package(s) copied"
+    if [ -s "$WORK_DIR/apks/x86_64/APKINDEX.tar.gz" ]; then
+        mcopy -i "$OUTPUT_IMG" "$WORK_DIR/apks/x86_64/APKINDEX.tar.gz" ::/apks/x86_64/APKINDEX.tar.gz
     fi
+    log "  apks/: $apk_count package(s) copied"
 
     # EFI bootloader
     mcopy -i "$OUTPUT_IMG" "$efi_bin" ::/EFI/BOOT/BOOTX64.EFI
@@ -518,7 +572,7 @@ main() {
 
     download_alpine_iso
     download_memtest
-    download_apkcache
+    build_apks_dir
 
     local ovl_tar
     ovl_tar=$(build_apkovl)
