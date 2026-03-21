@@ -21,7 +21,7 @@ OUTPUT_IMG="$SCRIPT_DIR/pcinfo-classic.img"
 ALPINE_VER="3.21"
 ALPINE_ARCH="x86_64"
 ALPINE_MIRROR="https://dl-cdn.alpinelinux.org/alpine"
-ALPINE_NETBOOT="${ALPINE_MIRROR}/v${ALPINE_VER}/releases/${ALPINE_ARCH}/netboot"
+ALPINE_ISO_URL="${ALPINE_MIRROR}/v${ALPINE_VER}/releases/${ALPINE_ARCH}/alpine-standard-${ALPINE_VER}.0-${ALPINE_ARCH}.iso"
 ALPINE_REPO_MAIN="${ALPINE_MIRROR}/v${ALPINE_VER}/main/${ALPINE_ARCH}"
 ALPINE_REPO_COMM="${ALPINE_MIRROR}/v${ALPINE_VER}/community/${ALPINE_ARCH}"
 
@@ -131,19 +131,41 @@ download_apk() {
     { rm -f "$dest"; warn "Cannot download: $apk_file"; return 1; }
 }
 
-# ---- Step 1: Download Alpine netboot files ----
-download_alpine_netboot() {
-    log "=== Downloading Alpine ${ALPINE_VER} netboot files ==="
+# ---- Step 1: Download Alpine standard ISO and extract boot files ----
+# The standard ISO's initramfs includes USB storage drivers (netboot does not).
+download_alpine_iso() {
+    log "=== Downloading Alpine ${ALPINE_VER} standard ISO ==="
     local nb="$WORK_DIR/netboot"
+    local iso="$WORK_DIR/alpine-standard.iso"
     mkdir -p "$nb"
 
-    download "${ALPINE_NETBOOT}/vmlinuz-lts"     "$nb/vmlinuz-lts"
-    download "${ALPINE_NETBOOT}/initramfs-lts"   "$nb/initramfs-lts"
-    download "${ALPINE_NETBOOT}/modloop-lts"     "$nb/modloop-lts"
+    # Check if boot files already extracted
+    if [ -s "$nb/vmlinuz-lts" ] && [ -s "$nb/initramfs-lts" ] && [ -s "$nb/modloop-lts" ]; then
+        log "Cached: vmlinuz-lts, initramfs-lts, modloop-lts"
+        return 0
+    fi
 
-    # Alpine public key for apk verification (bundled with netboot)
-    download "${ALPINE_MIRROR}/v${ALPINE_VER}/releases/${ALPINE_ARCH}/alpine-standard-${ALPINE_VER}.0-${ALPINE_ARCH}.iso.asc" \
-        "$nb/alpine.iso.asc" 2>/dev/null || true
+    # Download ISO (cached)
+    if [ ! -s "$iso" ]; then
+        log "Downloading alpine-standard-${ALPINE_VER}.0-${ALPINE_ARCH}.iso (~240MB)..."
+        wget -q --show-progress -O "$iso" "$ALPINE_ISO_URL" || \
+            { rm -f "$iso"; error "Failed to download Alpine standard ISO"; }
+    else
+        log "Cached: alpine-standard.iso"
+    fi
+
+    # Extract boot files from ISO using 7z
+    log "Extracting boot files from ISO..."
+    7z e "$iso" -o"$nb" boot/vmlinuz-lts boot/initramfs-lts boot/modloop-lts -y > /dev/null 2>&1 || \
+        error "Failed to extract boot files from ISO"
+
+    [ -s "$nb/vmlinuz-lts" ]   || error "vmlinuz-lts not found in ISO"
+    [ -s "$nb/initramfs-lts" ] || error "initramfs-lts not found in ISO"
+    [ -s "$nb/modloop-lts" ]   || error "modloop-lts not found in ISO"
+
+    log "  vmlinuz-lts:   $(du -sh "$nb/vmlinuz-lts"   | cut -f1)"
+    log "  initramfs-lts: $(du -sh "$nb/initramfs-lts" | cut -f1)"
+    log "  modloop-lts:   $(du -sh "$nb/modloop-lts"   | cut -f1)"
 }
 
 # ---- Step 2: Download memtest86+ ----
@@ -486,7 +508,7 @@ install_syslinux() {
 main() {
     log "========================================"
     log " PCInfo Classic - Build Script"
-    log " Alpine Linux ${ALPINE_VER} / ${ALPINE_ARCH}"
+    log " Alpine Linux ${ALPINE_VER} standard ISO / ${ALPINE_ARCH}"
     log "========================================"
     log ""
 
@@ -494,7 +516,7 @@ main() {
 
     mkdir -p "$WORK_DIR"
 
-    download_alpine_netboot
+    download_alpine_iso
     download_memtest
     download_apkcache
 
