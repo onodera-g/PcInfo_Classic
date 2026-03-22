@@ -28,7 +28,7 @@ ALPINE_REPO_COMM="${ALPINE_MIRROR}/v${ALPINE_VER}/community/${ALPINE_ARCH}"
 # USB image size (MB) - minimum required
 IMG_SIZE_MB=512
 
-# USB volume label - must match alpine_dev= kernel param
+# USB volume label - used by the generated FAT32 image
 USB_LABEL="PCINFO"
 
 # ---- Logging ----
@@ -213,7 +213,7 @@ download_memtest() {
 }
 
 # ---- Step 3: Build apks/ directory for diskless boot ----
-# Alpine diskless init installs packages from alpine_dev/apks/ at boot.
+# Alpine diskless init installs packages from a local repository on the boot media.
 # We need:  1) base packages from the standard ISO
 #           2) additional tools required by PCInfo scripts
 build_apks_dir() {
@@ -248,9 +248,6 @@ build_apks_dir() {
     done
     log "  Additional packages: $ok ok, $fail failed"
 
-    # Mark as boot repository
-    touch "$WORK_DIR/apks/.boot_repository"
-
     # Rebuild APKINDEX to include our downloaded packages
     # (Alpine's apk tool will use the existing APKINDEX.tar.gz,
     #  new packages are found by apk add --allow-untrusted)
@@ -268,6 +265,7 @@ build_apkovl() {
     mkdir -p "$ovl_dir/etc/apk"
     mkdir -p "$ovl_dir/opt/pcinfo"
     mkdir -p "$ovl_dir/root"
+    mkdir -p "$ovl_dir/usr/sbin"
 
     # Hostname
     echo "pcinfo" > "$ovl_dir/etc/hostname"
@@ -278,9 +276,9 @@ build_apkovl() {
 ::sysinit:/sbin/openrc boot
 ::wait:/sbin/openrc default
 
-tty1::respawn:/sbin/agetty --autologin root --noclear tty1 linux
-tty2::askfirst:/sbin/agetty --noclear tty2 linux
-tty3::askfirst:/sbin/agetty --noclear tty3 linux
+tty1::respawn:/sbin/getty -n -l /usr/sbin/autologin 38400 tty1 linux
+tty2::askfirst:/sbin/getty 38400 tty2 linux
+tty3::askfirst:/sbin/getty 38400 tty3 linux
 
 ::ctrlaltdel:/sbin/reboot
 ::shutdown:/sbin/openrc shutdown
@@ -296,11 +294,11 @@ cd /root
 exec /opt/pcinfo/menu.sh
 EOF
 
-    # APK repositories
-    cat > "$ovl_dir/etc/apk/repositories" << EOF
-${ALPINE_MIRROR}/v${ALPINE_VER}/main
-${ALPINE_MIRROR}/v${ALPINE_VER}/community
+    cat > "$ovl_dir/usr/sbin/autologin" << 'EOF'
+#!/bin/sh
+exec /bin/login -f root
 EOF
+    chmod +x "$ovl_dir/usr/sbin/autologin"
 
     # APK world file: ONLY packages available in the standard ISO's apks/ directory.
     # 'alpine-base' is already hardcoded in Alpine's init, so only add ISO-included extras.
@@ -443,9 +441,6 @@ build_fat32_image() {
 
     # Copy apks/ directory (base system + tools for diskless boot)
     local apk_count=0
-    if [ -s "$WORK_DIR/apks/.boot_repository" ]; then
-        mcopy -i "$OUTPUT_IMG" "$WORK_DIR/apks/.boot_repository" ::/apks/.boot_repository
-    fi
     for apk in "$WORK_DIR/apks/x86_64/"*.apk; do
         [ -s "$apk" ] || continue
         mcopy -i "$OUTPUT_IMG" "$apk" ::/apks/x86_64/"$(basename "$apk")"
@@ -475,7 +470,7 @@ if [ -f (\$root)/EFI/BOOT/grubenv ]; then
 fi
 
 menuentry "PCInfo Classic" --id pcinfo {
-    linuxefi  /boot/vmlinuz-lts modules=loop,squashfs,sd-mod,usb-storage quiet alpine_dev=LABEL=${USB_LABEL}:vfat
+    linuxefi  /boot/vmlinuz-lts modules=loop,squashfs,sd-mod,usb-storage,vfat,fat,nls_cp437,nls_iso8859-1 quiet alpine_repo=/media/usb/apks,/media/sda/apks,/media/sdb/apks,/media/mmcblk0p1/apks,/media/LABEL=${USB_LABEL}/apks usbdelay=3
     initrdefi /boot/initramfs-lts
 }
 
@@ -512,7 +507,7 @@ LABEL pcinfo
   MENU LABEL PCInfo Classic (Alpine Linux)
   KERNEL /boot/vmlinuz-lts
   INITRD /boot/initramfs-lts
-  APPEND modules=loop,squashfs,sd-mod,usb-storage quiet alpine_dev=LABEL=${USB_LABEL}:vfat
+  APPEND modules=loop,squashfs,sd-mod,usb-storage,vfat,fat,nls_cp437,nls_iso8859-1 quiet alpine_repo=/media/usb/apks,/media/sda/apks,/media/sdb/apks,/media/mmcblk0p1/apks,/media/LABEL=${USB_LABEL}/apks usbdelay=3
 
 SYSLINUX_EOF
 
