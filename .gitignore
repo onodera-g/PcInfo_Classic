@@ -1,7 +1,9 @@
 # Build artifacts (work dirs, not committed)
 build/work/
 build/work_alpine/
+build/drivers/
 build/backup/
+work_alpine/
 
 # Build output: .img is large (tracked separately or excluded)
 build/pcinfo-classic.img

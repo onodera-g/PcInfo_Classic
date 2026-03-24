@@ -1,0 +1,2 @@
+# vendor_id|device_id|subvendor_id|subdevice_id|vram_hint
+0x1002|0x67b0|||4 GB
