@@ -14,6 +14,10 @@ group_title() {
     printf "%s\n" "$1"
 }
 
+indented_group_title() {
+    printf " %s\n" "$1"
+}
+
 subitem() {
     local label="$1" val="$2"
     printf "  %-22s: %s\n" "$label" "$val"
@@ -599,7 +603,7 @@ if [ -n "$memory_modules" ]; then
         first_memory=0
         memory_index=$((memory_index + 1))
         if [ "$memory_total" -gt 1 ]; then
-            group_title "Memory $memory_index"
+            indented_group_title "Memory $memory_index"
             subitem "Slot" "$(normalize_memory_locator "$locator")"
             subitem "Model" "$model"
             subitem "Capacity" "$(normalize_capacity_text "$size")"
@@ -658,7 +662,7 @@ for dev in /sys/bus/pci/devices/*; do
     gpu_link_width=$(get_pci_link_width "$dev" "0000:$slot")
     [ "$gpu_count" -gt 1 ] && printf '\n'
     if [ "$gpu_total" -gt 1 ]; then
-        group_title "GPU $gpu_count"
+        indented_group_title "GPU $gpu_count"
         subitem "Slot" "$gpu_slot_label"
         subitem "Model" "$gpu_model"
         subitem "VRAM" "$(normalize_vram_text "$gpu_vram")"
@@ -695,7 +699,7 @@ if command -v lsblk > /dev/null 2>&1; then
         [ -n "$model" ] || model="$name"
         [ "$storage_index" -gt 0 ] && printf '\n'
         if [ "$storage_total" -gt 1 ]; then
-            group_title "Storage $storage_index"
+            indented_group_title "Storage $storage_index"
             subitem "Device" "$name"
             subitem "Model" "$model"
             subitem "Capacity" "$(format_decimal_bytes "$size")"
@@ -725,7 +729,7 @@ else
         storage_index=$((storage_index + 1))
         [ "$storage_index" -gt 1 ] && printf '\n'
         if [ "$storage_total" -gt 1 ]; then
-            group_title "Storage $storage_index"
+            indented_group_title "Storage $storage_index"
             subitem "Device" "$dev_name"
             subitem "Model" "${model:-$dev_name}"
             subitem "Capacity" "$capacity"
