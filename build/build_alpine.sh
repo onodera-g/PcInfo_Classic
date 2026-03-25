@@ -19,7 +19,6 @@ OUTPUT_IMG="$SCRIPT_DIR/pcinfo-classic.img"
 GPU_DRIVERS_DIR="$SCRIPT_DIR/drivers"
 GPU_PCI_IDS_BUILD_FILE="$WORK_DIR/gpu_pci_ids.txt"
 GPU_PCI_SUBSYSTEM_IDS_BUILD_FILE="$WORK_DIR/gpu_pci_subsystem_ids.txt"
-GPU_VRAM_HINTS_SOURCE_FILE="$SRC_DIR/gpu_vram_hints.txt"
 
 # Alpine version and mirror
 ALPINE_VER="3.21"
@@ -657,11 +656,6 @@ SETUP_EOF
         log "  Installed: gpu_pci_subsystem_ids.txt"
     else
         error "Missing generated GPU PCI subsystem database: $GPU_PCI_SUBSYSTEM_IDS_BUILD_FILE"
-    fi
-
-    if [ -f "$GPU_VRAM_HINTS_SOURCE_FILE" ]; then
-        cp "$GPU_VRAM_HINTS_SOURCE_FILE" "$ovl_dir/opt/pcinfo/gpu_vram_hints.txt"
-        log "  Installed: gpu_vram_hints.txt"
     fi
 
     # Symlink: /opt/pcinfo/menu.sh as entrypoint

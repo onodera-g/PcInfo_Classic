@@ -15,7 +15,6 @@ RESET='\033[0m'
 SEP='----------------------------------------'
 GPU_PCI_IDS_FILE="/opt/pcinfo/gpu_pci_ids.txt"
 GPU_PCI_SUBSYSTEM_IDS_FILE="/opt/pcinfo/gpu_pci_subsystem_ids.txt"
-GPU_VRAM_HINTS_FILE="/opt/pcinfo/gpu_vram_hints.txt"
 
 # Read a single key from TTY (raw mode)
 read_key() {
@@ -351,34 +350,6 @@ get_pci_gpu_model() {
     printf '%s\n' "$gpu_name"
 }
 
-lookup_pci_gpu_vram_hint() {
-    local vendor="$1"
-    local device_id="$2"
-    local subsystem_vendor="$3"
-    local subsystem_device="$4"
-
-    if [ -f "$GPU_VRAM_HINTS_FILE" ]; then
-        awk -F '|' -v vendor="$vendor" -v device="$device_id" -v subvendor="$subsystem_vendor" -v subdevice="$subsystem_device" '
-            $1 ~ /^#/ { next }
-            $1 == vendor && $2 == device && $3 == subvendor && $4 == subdevice {
-                print $5
-                exit
-            }
-            $1 == vendor && $2 == device && $3 == "" && $4 == "" {
-                fallback = $5
-            }
-            END {
-                if (fallback != "") {
-                    print fallback
-                }
-            }
-        ' "$GPU_VRAM_HINTS_FILE" | head -n 1
-        return 0
-    fi
-
-    lookup_pci_gpu_field "$vendor" "$device_id" 5 2>/dev/null
-}
-
 format_gpu_vram_bytes() {
     local bytes="$1"
     local gb=$((1000 * 1000 * 1000))
@@ -598,8 +569,6 @@ get_pci_gpu_vram() {
     local vram_bytes=""
     local dmesg_line=""
     local pci_short=""
-    local vram_hint=""
-
     if [ "$vendor" = "0x8086" ]; then
         printf '%s\n' 'Shared'
         return 0
@@ -617,9 +586,6 @@ get_pci_gpu_vram() {
         dmesg_line=$(parse_vram_from_dmesg "$dmesg_line")
         [ -n "$dmesg_line" ] && { printf '%s\n' "$dmesg_line"; return 0; }
     fi
-
-    vram_hint=$(lookup_pci_gpu_vram_hint "$vendor" "$device_id" "$subsystem_vendor" "$subsystem_device")
-    [ -n "$vram_hint" ] && { printf '%s\n' "$vram_hint"; return 0; }
 
     if [ -z "$driver" ] || [ "$driver" = "none" ]; then
         printf '%s\n' 'Unavailable (driver not loaded)'
