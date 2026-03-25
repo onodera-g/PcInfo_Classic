@@ -3,6 +3,20 @@
 
 . /opt/pcinfo/common.sh
 
+section() {
+    printf "\n${BOLD}${CYAN}[%s]${RESET}\n" "$1"
+}
+
+group_title() {
+    printf " %s\n" "$1"
+}
+
+item() {
+    local label="$1"
+    local val="$2"
+    printf "  %-22s: %b\n" "$label" "$val"
+}
+
 # Detect GPU PCI vendor IDs present in the system
 detect_gpu_vendors() {
     for dev in /sys/bus/pci/devices/*; do
@@ -202,8 +216,6 @@ install_gpu_drivers() {
 load_gpu_module() {
     local vendor="$1"
     local modprobe_log=""
-
-    printf "\n  Loading kernel modules...\n"
     case "$vendor" in
         0x10de)
             modprobe_log=$(mktemp) || modprobe_log=""
@@ -270,7 +282,24 @@ load_gpu_module() {
 
 # Display GPU detection results
 show_gpu_info() {
-    printf "\n${BOLD}${CYAN}--- Detected GPUs ---${RESET}\n\n"
+    section "Result"
+
+    if ls /dev/dri/card* >/dev/null 2>&1; then
+        for card in /dev/dri/card*; do
+            local drm_drv=""
+            local card_num
+            card_num=$(basename "$card")
+            [ -L "/sys/class/drm/$card_num/device/driver" ] && \
+                drm_drv=$(basename "$(readlink /sys/class/drm/$card_num/device/driver 2>/dev/null)")
+            printf "  %s -> ${GREEN}%s${RESET}\n" "$card" "${drm_drv:-present}"
+        done
+        printf "  ${GREEN}[OK] Graphics output available${RESET}\n"
+    else
+        printf "  ${RED}No DRM device found${RESET}\n"
+        printf "  ${RED}[NG] Graphics output unavailable${RESET}\n"
+    fi
+
+    printf "\n"
 
     local gpu_count=0
     for dev in /sys/bus/pci/devices/*; do
@@ -282,7 +311,7 @@ show_gpu_info() {
         esac
 
         gpu_count=$((gpu_count + 1))
-        local vendor device_id subsystem_vendor subsystem_device pci_slot vendor_name driver gpu_model gpu_maker gpu_vram gpu_summary
+        local vendor device_id subsystem_vendor subsystem_device pci_slot vendor_name driver gpu_model gpu_vram gpu_slot_label driver_text
 
         vendor=$(cat "$dev/vendor" 2>/dev/null)
         device_id=$(cat "$dev/device" 2>/dev/null)
@@ -290,42 +319,28 @@ show_gpu_info() {
         subsystem_device=$(cat "$dev/subsystem_device" 2>/dev/null)
         pci_slot=$(basename "$dev")
         vendor_name=$(get_pci_vendor_name "$vendor")
-        gpu_maker=$(get_pci_gpu_manufacturer "$vendor" "$device_id")
         gpu_model=$(get_pci_gpu_model "$pci_slot" "$vendor" "$device_id" "$vendor_name" "$subsystem_vendor" "$subsystem_device")
 
         driver=""
         [ -L "$dev/driver" ] && driver=$(basename "$(readlink "$dev/driver" 2>/dev/null)")
         gpu_vram=$(get_pci_gpu_vram "$dev" "$pci_slot" "$vendor" "$device_id" "$driver" "$subsystem_vendor" "$subsystem_device")
-        gpu_summary=$(join_display_fields "$gpu_maker" "$gpu_model" "$gpu_vram")
+        gpu_slot_label=$(get_pci_slot_label "$dev" "$pci_slot")
 
-        printf "  ${BOLD}GPU %d: %s${RESET}\n" "$gpu_count" "$gpu_summary"
-        printf "    Slot   : %s\n" "$pci_slot"
-        printf "    Vendor : %s   Device: %s\n" "$vendor" "$device_id"
         if [ -n "$driver" ]; then
-            printf "    Driver : ${GREEN}%s (bound)${RESET}\n" "$driver"
+            driver_text="${GREEN}${driver}${RESET}"
         else
-            printf "    Driver : ${RED}not loaded${RESET}\n"
+            driver_text="${RED}not loaded${RESET}"
         fi
+
+        group_title "GPU $gpu_count"
+        item "Slot" "$gpu_slot_label"
+        item "Model" "$gpu_model"
+        item "VRAM" "$gpu_vram"
+        item "Driver" "$driver_text"
         printf "\n"
     done
 
-    [ "$gpu_count" -eq 0 ] && printf "  ${RED}No GPU detected${RESET}\n\n"
-
-    printf "${BOLD}--- DRM Devices ---${RESET}\n\n"
-    if ls /dev/dri/card* >/dev/null 2>&1; then
-        for card in /dev/dri/card*; do
-            local drm_drv=""
-            local card_num
-            card_num=$(basename "$card")
-            [ -L "/sys/class/drm/$card_num/device/driver" ] && \
-                drm_drv=$(basename "$(readlink /sys/class/drm/$card_num/device/driver 2>/dev/null)")
-            printf "  %s -> ${GREEN}%s${RESET}\n" "$card" "${drm_drv:-present}"
-        done
-        printf "\n  ${GREEN}[OK] Graphics output available${RESET}\n"
-    else
-        printf "  ${RED}No DRM device found${RESET}\n"
-        printf "  ${RED}[NG] Graphics output unavailable${RESET}\n"
-    fi
+    [ "$gpu_count" -eq 0 ] && printf "  ${RED}No GPU detected${RESET}\n"
 }
 
 # ----- Main -----
@@ -338,24 +353,23 @@ printf '\033[2J\033[H' > "$TTY" 2>/dev/null
 vendors=$(detect_gpu_vendors)
 
 if [ -z "$vendors" ]; then
-    printf "\n  ${RED}No GPU detected in this system.${RESET}\n\n${SEP}\nPress q to return\n" > "$TTY"
-    while true; do read_key; case "$key" in q|Q) exit 0 ;; esac; done
+    printf "\n  ${RED}No GPU detected in this system.${RESET}\n\n${SEP}\nPress any key to return\n" > "$TTY"
+    wait_any_key
+    exit 0
 fi
 
 # Mount USB
 printf "  Mounting USB (LABEL=PCINFO)...\n" > "$TTY"
 if ! mount_usb; then
-    printf "  ${RED}USB not found. Cannot load drivers.${RESET}\n\n${SEP}\nPress q to return\n" > "$TTY"
-    while true; do read_key; case "$key" in q|Q) exit 0 ;; esac; done
+    printf "  ${RED}USB not found. Cannot load drivers.${RESET}\n\n${SEP}\nPress any key to return\n" > "$TTY"
+    wait_any_key
+    exit 0
 fi
 
 # Install drivers for each detected GPU vendor
-printf '\033[2J\033[H' > "$TTY" 2>/dev/null
 {
-    printf "\n${BOLD}${CYAN}[GPU Test - Installing Drivers]${RESET}\n\n"
     for v in $vendors; do
         install_gpu_drivers "$v"
-        printf "\n"
     done
 
     printf "  Waiting for device initialization..."
@@ -363,21 +377,17 @@ printf '\033[2J\033[H' > "$TTY" 2>/dev/null
     printf " done\n"
 
     # Load modules
+    printf "  Loading kernel modules...\n"
     for v in $vendors; do
         load_gpu_module "$v"
     done
 
     sleep 1
-    printf "\n${SEP}\n"
+    printf "\n"
     show_gpu_info
-    printf "\n${SEP}\nPress q to return\n"
+    printf "\n${SEP}\nPress any key to return\n"
 } > "$TTY"
 
 unmount_usb
 
-while true; do
-    read_key
-    case "$key" in
-        q|Q) break ;;
-    esac
-done
+wait_any_key
