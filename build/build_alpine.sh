@@ -360,7 +360,7 @@ build_apks_dir() {
 
     # Download additional packages needed by PCInfo
     log "  Downloading additional packages..."
-    local pkgs="bash dialog smartmontools nvme-cli pciutils wireless-tools wpa_supplicant iw \
+    local pkgs="bash dialog smartmontools nvme-cli pciutils \
                 hdparm util-linux blkid dmidecode eudev"
     local ok=0 fail=0
     for pkg in $pkgs; do
@@ -554,9 +554,8 @@ EOF
     # 'alpine-base' is already hardcoded in Alpine's init, so only add ISO-included extras.
     # Additional tools (dialog, smartmontools, etc.) are installed by 00-pcinfo-setup.start
     # AFTER boot using the pre-downloaded .apk files in USB:/apks/x86_64/.
-    cat > "$ovl_dir/etc/apk/world" << 'EOF'
+cat > "$ovl_dir/etc/apk/world" << 'EOF'
 alpine-base
-wpa_supplicant
 EOF
 
     ln -sf /etc/init.d/local "$ovl_dir/etc/runlevels/default/local"
@@ -607,7 +606,7 @@ fi
 APK_DIR="$USB_MNT/apks/x86_64"
 if is_mounted "$USB_MNT" && [ -d "$APK_DIR" ]; then
     pkgs=""
-    for f in bash dialog smartmontools nvme-cli pciutils wireless-tools iw hdparm util-linux blkid dmidecode eudev; do
+    for f in bash dialog smartmontools nvme-cli pciutils hdparm util-linux blkid dmidecode eudev; do
         found=$(find "$APK_DIR" -name "${f}-[0-9]*.apk" 2>/dev/null | head -1)
         [ -n "$found" ] && pkgs="$pkgs $found"
     done
@@ -633,7 +632,7 @@ SETUP_EOF
     fi
 
     # Install PCInfo scripts
-    local scripts="common.sh menu.sh menu_pcinfo.sh menu_storage.sh menu_gpu.sh menu_memtest.sh menu_network.sh pcinfo.sh"
+    local scripts="common.sh menu.sh menu_pcinfo.sh menu_storage.sh menu_gpu.sh menu_memtest.sh pcinfo.sh"
     for s in $scripts; do
         if [ -f "$SRC_DIR/$s" ]; then
             cp "$SRC_DIR/$s" "$ovl_dir/opt/pcinfo/$s"

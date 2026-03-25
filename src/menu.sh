@@ -20,10 +20,8 @@ show_menu() {
     printf '\n' > "$TTY"
     printf '  4.  Storage Health\n' > "$TTY"
     printf '\n' > "$TTY"
-    printf '  5.  Network Setup\n' > "$TTY"
-    printf '\n' > "$TTY"
     printf '  q.  Shutdown\n' > "$TTY"
-    printf '\n  Select [1-5/q]: ' > "$TTY"
+    printf '\n  Select [1-4/q]: ' > "$TTY"
 }
 
 while true; do
@@ -35,7 +33,6 @@ while true; do
         2) /opt/pcinfo/menu_memtest.sh ;;
         3) /opt/pcinfo/menu_gpu.sh ;;
         4) /opt/pcinfo/menu_storage.sh ;;
-        5) /opt/pcinfo/menu_network.sh ;;
         q|Q) break ;;
     esac
 done

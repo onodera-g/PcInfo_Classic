@@ -30,6 +30,10 @@ read_key() {
     trap - INT TERM
 }
 
+wait_any_key() {
+    read_key || true
+}
+
 # Display stdin content page by page (LINES_PER_PAGE lines per page)
 # Enter: next page / q: return to top on last page
 show_paged() {
@@ -47,11 +51,9 @@ show_paged() {
             _start=$((_end + 1))
         else
             printf '%s\n' "$_chunk" > "$TTY"
-            printf '\n%s\nPress q to return to menu\n' "$SEP" > "$TTY"
-            while true; do
-                read_key
-                case "$key" in q|Q|'') return ;; esac
-            done
+            printf '\n%s\nPress any key to return\n' "$SEP" > "$TTY"
+            wait_any_key
+            return
         fi
     done
 }
@@ -129,11 +131,9 @@ show_paged_blocks() {
             printf '\n%s\nPress Enter for more...\n' "$SEP" > "$TTY"
             read -r _dummy < "$TTY"
         else
-            printf '\n%s\nPress q to return to menu\n' "$SEP" > "$TTY"
-            while true; do
-                read_key
-                case "$key" in q|Q|'') break ;; esac
-            done
+            printf '\n%s\nPress any key to return\n' "$SEP" > "$TTY"
+            wait_any_key
+            break
         fi
     done
 
