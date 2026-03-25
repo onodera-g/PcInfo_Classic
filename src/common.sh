@@ -333,16 +333,19 @@ get_pci_gpu_model() {
 
     pci_short=$(printf '%s\n' "$pci_slot" | sed 's/^0000://')
 
-    gpu_name=$(lookup_pci_gpu_subsystem_field "$vendor" "$device_id" "$subsystem_vendor" "$subsystem_device" 6 2>/dev/null)
+    if command -v lspci > /dev/null 2>&1; then
+        gpu_name=$(lspci -s "$pci_short" 2>/dev/null | sed 's/.*[Cc]ontroller[^:]*: //')
+        gpu_name=$(normalize_gpu_model_name "$gpu_name")
+
+        [ -n "$gpu_name" ] || gpu_name=$(lspci -nn -s "$pci_short" 2>/dev/null | sed 's/.*[Cc]ontroller[^:]*: //' | sed 's/ \[[0-9a-fA-F]\{4\}:[0-9a-fA-F]\{4\}\]$//')
+        gpu_name=$(normalize_gpu_model_name "$gpu_name")
+    fi
+
+    [ -n "$gpu_name" ] || gpu_name=$(lookup_pci_gpu_subsystem_field "$vendor" "$device_id" "$subsystem_vendor" "$subsystem_device" 6 2>/dev/null)
     gpu_name=$(normalize_gpu_model_name "$gpu_name")
 
     [ -n "$gpu_name" ] || gpu_name=$(lookup_pci_gpu_field "$vendor" "$device_id" 4 2>/dev/null)
     gpu_name=$(normalize_gpu_model_name "$gpu_name")
-
-    if command -v lspci > /dev/null 2>&1; then
-        [ -n "$gpu_name" ] || gpu_name=$(lspci -s "$pci_short" 2>/dev/null | sed 's/.*[Cc]ontroller[^:]*: //')
-        [ -n "$gpu_name" ] || gpu_name=$(lspci -nn -s "$pci_short" 2>/dev/null | sed 's/.*[Cc]ontroller[^:]*: //' | sed 's/ \[[0-9a-fA-F]\{4\}:[0-9a-fA-F]\{4\}\]$//')
-    fi
 
     [ -n "$gpu_name" ] || gpu_name="${vendor_name} GPU (${device_id})"
     printf '%s\n' "$gpu_name"
