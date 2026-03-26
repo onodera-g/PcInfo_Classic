@@ -376,11 +376,17 @@ fi
     sleep 2
     printf " done\n"
 
-    # Load modules
+    # Load modules (suppress kernel printk to avoid blank lines on TTY)
     printf "  Loading kernel modules...\n"
+    _old_printk=""
+    if [ -r /proc/sys/kernel/printk ]; then
+        read -r _old_printk _ < /proc/sys/kernel/printk
+        echo 0 > /proc/sys/kernel/printk 2>/dev/null
+    fi
     for v in $vendors; do
         load_gpu_module "$v"
     done
+    [ -n "$_old_printk" ] && echo "$_old_printk" > /proc/sys/kernel/printk 2>/dev/null
 
     sleep 1
     printf "\n"

@@ -53,9 +53,10 @@ while true; do
                     printf "${YELLOW}Auto-boot not available.${RESET}\n\n"
                     printf "Please reboot manually and select\n"
                     printf "\"Memtest86+\" from the boot menu.\n\n"
-                    printf "${SEP}\nPress q to return\n"
+                    printf "${SEP}\nPress any key to return\n"
                 } > "$TTY"
-                while true; do read_key; case "$key" in q|Q) break 2 ;; esac; done
+                wait_any_key
+                break 2
             fi
             ;;
     esac
