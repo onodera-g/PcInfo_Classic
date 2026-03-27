@@ -700,11 +700,12 @@ SETUP_EOF
         warn "Missing nvme-cli APK in $WORK_DIR/apks/x86_64 (NVMe health check unavailable)"
     fi
 
-    # Pre-install kexec-tools (and its dependency xz-libs) for memtest kexec
+    # Pre-install kexec-tools and its runtime dependencies for memtest kexec.
     # We use tar extraction (not apk) so dependencies must be extracted manually.
-    local kexec_apk xz_apk
+    local kexec_apk xz_apk zlib_apk
     kexec_apk=$(find "$WORK_DIR/apks/x86_64" -maxdepth 1 -name 'kexec-tools-*.apk' | grep -v '\-doc' | head -n 1)
     xz_apk=$(find "$WORK_DIR/apks/x86_64" -maxdepth 1 -name 'xz-libs-*.apk' | head -n 1)
+    zlib_apk=$(find "$WORK_DIR/apks/x86_64" -maxdepth 1 -name 'zlib-*.apk' | head -n 1)
     if [ -n "$kexec_apk" ]; then
         # xz-libs provides liblzma.so.5 which kexec requires
         if [ -n "$xz_apk" ]; then
@@ -712,10 +713,41 @@ SETUP_EOF
                 --exclude='.SIGN.*' \
                 --exclude='.PKGINFO' 2>/dev/null || true
         fi
+        # zlib provides libz.so.1 which kexec requires
+        if [ -n "$zlib_apk" ]; then
+            tar -xzf "$zlib_apk" -C "$ovl_dir" \
+                --exclude='.SIGN.*' \
+                --exclude='.PKGINFO' 2>/dev/null || true
+        fi
         tar -xzf "$kexec_apk" -C "$ovl_dir" \
             --exclude='.SIGN.*' \
             --exclude='.PKGINFO' 2>/dev/null || \
             error "Failed to extract kexec-tools into overlay"
+
+        # Patch kexec binary: replace /sys/firmware/memmap with a non-existent path
+        # to force kexec to use /proc/iomem for memory range detection.
+        # On UEFI systems, /sys/firmware/memmap may return 0 "System RAM" entries
+        # (returning success with 0 ranges), which causes locate_hole to always fail.
+        # /proc/iomem reliably reports proper System RAM entries.
+        local kexec_bin="$ovl_dir/usr/sbin/kexec"
+        if [ -f "$kexec_bin" ] && command -v python3 >/dev/null 2>&1; then
+            # Redirect stdout to /dev/null: build_apkovl() returns its path via stdout,
+            # so any extra stdout from sub-commands would corrupt the return value.
+            if python3 - "$kexec_bin" << 'PYEOF' >/dev/null 2>&1; then
+import sys
+path = sys.argv[1]
+data = open(path, 'rb').read()
+old = b'/sys/firmware/memmap'
+new = b'/sys/firmware/NOSCAN'
+if old in data:
+    open(path, 'wb').write(data.replace(old, new))
+    sys.exit(0)
+sys.exit(1)
+PYEOF
+                log "  Patched kexec binary: /sys/firmware/memmap -> /sys/firmware/NOSCAN (force proc/iomem)"
+            fi
+        fi
+
         log "  Installed: kexec-tools runtime"
     else
         warn "Missing kexec-tools APK - memtest kexec will be unavailable"
@@ -859,24 +891,50 @@ build_fat32_image() {
     mcopy -i "$OUTPUT_IMG" "$efi_bin" ::/EFI/BOOT/BOOTX64.EFI
     log "  BOOTX64.EFI copied"
 
-    # GRUB EFI config: always boot PCInfo (Alpine) immediately.
-    # Memtest one-shot is handled via /memtest_flag on USB + kexec in 00-pcinfo-setup.start,
-    # which works identically for both EFI and BIOS systems.
+    # GRUB EFI config: normally boots PCInfo immediately.
+    # Memtest one-shot is triggered by writing memtest_next=1 to /grubenv on the USB.
+    # GRUB reads the flag, clears it (save_env), then chainloads memtest.efi.
+    # This prevents boot loops: flag is cleared before memtest runs.
     local grub_cfg="$WORK_DIR/grub.cfg"
 
     cat > "$grub_cfg" << GRUB_EOF
 set default="pcinfo"
 set timeout=0
 
+# Load one-shot memtest flag from persistent grubenv
+load_env -f (\$root)/grubenv
+
+if [ "\${memtest_next}" = "1" ]; then
+    # Clear the flag BEFORE booting memtest to prevent boot loop
+    set memtest_next=0
+    save_env -f (\$root)/grubenv memtest_next
+    set default="memtest"
+fi
+
 menuentry "PCInfo Classic" --id pcinfo {
-    linuxefi  /boot/vmlinuz-lts modloop=/boot/modloop-lts modules=${BOOT_MODULES} quiet alpine_repo=/media/usb/apks,/media/sda/apks,/media/sdb/apks,/media/mmcblk0p1/apks,/media/LABEL=${USB_LABEL}/apks usbdelay=3 memmap=640K@0
+    linuxefi  /boot/vmlinuz-lts modloop=/boot/modloop-lts modules=${BOOT_MODULES} quiet alpine_repo=/media/usb/apks,/media/sda/apks,/media/sdb/apks,/media/mmcblk0p1/apks,/media/LABEL=${USB_LABEL}/apks usbdelay=3
     initrdefi /boot/initramfs-lts
+}
+
+menuentry "Memtest86+" --id memtest {
+    chainloader /boot/memtest.efi
 }
 
 GRUB_EOF
 
+    # Create initial grubenv (1024-byte GRUB environment block, memtest_next=0)
+    local grubenv="$WORK_DIR/grubenv"
+    {
+        printf '# GRUB Environment Block\nmemtest_next=0\n'
+    } > "$grubenv"
+    local used
+    used=$(wc -c < "$grubenv")
+    dd if=/dev/zero bs=1 count=$((1024 - used)) 2>/dev/null | tr '\0' '#' >> "$grubenv"
+
     mcopy -i "$OUTPUT_IMG" "$grub_cfg" ::/EFI/BOOT/grub.cfg
     log "  grub.cfg copied"
+    mcopy -i "$OUTPUT_IMG" "$grubenv" ::/grubenv
+    log "  grubenv copied (initial state: memtest_next=0)"
 
     # Syslinux config (BIOS boot)
     local syslinux_cfg="$WORK_DIR/syslinux.cfg"

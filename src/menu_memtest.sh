@@ -5,44 +5,66 @@
 
 MEMTEST_FAIL=""
 
-run_memtest() {
-    local memtest_bin="$USB_MOUNT/boot/memtest.bin"
+# Write a 1024-byte GRUB environment block to $1 with memtest_next=$2
+_write_grubenv() {
+    local file="$1" val="$2"
+    printf '# GRUB Environment Block\nmemtest_next=%s\n' "$val" > "$file" || return 1
+    local used
+    used=$(wc -c < "$file")
+    local pad=$((1024 - used))
+    [ "$pad" -gt 0 ] && dd if=/dev/zero bs=1 count="$pad" 2>/dev/null | tr '\0' '#' >> "$file"
+    return 0
+}
 
-    if ! command -v kexec >/dev/null 2>&1; then
-        MEMTEST_FAIL="kexec not found in PATH"
-        return 1
-    fi
-
-    if ! mountpoint -q "$USB_MOUNT" 2>/dev/null; then
-        MEMTEST_FAIL="USB not mounted at $USB_MOUNT"
-        return 1
-    fi
-
-    if ! [ -f "$memtest_bin" ]; then
-        MEMTEST_FAIL="memtest.bin not found: $memtest_bin"
-        return 1
-    fi
-
-    local err
-    # Try loading with various types. bzImage is the primary protocol for Memtest86+.
-    for kexec_type in "" "--type=bzImage"; do
-        # shellcheck disable=SC2086
-        err=$(kexec -l $kexec_type "$memtest_bin" 2>&1)
-        if [ $? -eq 0 ]; then
-            kexec -e 2>/dev/null
-            MEMTEST_FAIL="kexec -e returned unexpectedly"
-            return 1
-        fi
-    done
-
-    # Include memory map for diagnosis (show first 12 lines of /proc/iomem)
-    local iomem_low
-    iomem_low=$(grep -E "^[0-9a-f]" /proc/iomem 2>/dev/null | head -12)
-    MEMTEST_FAIL="kexec -l failed: $err"
-    [ -n "$iomem_low" ] && MEMTEST_FAIL="$MEMTEST_FAIL
-iomem: $iomem_low"
-
+# Find the mount point of the USB FAT32 filesystem already mounted by Alpine init.
+# Alpine mounts the USB under /media/; we look for that first.
+_find_usb_mountpoint() {
+    local dev mp fstype _rest
+    # Prefer /media/* vfat mounts (Alpine standard)
+    while read -r dev mp fstype _rest; do
+        [ "$fstype" = "vfat" ] || continue
+        case "$mp" in /media/*) printf '%s\n' "$mp"; return 0 ;; esac
+    done < /proc/mounts
+    # Fallback: any vfat mount
+    awk '$3=="vfat"{print $2; exit}' /proc/mounts 2>/dev/null && return 0
     return 1
+}
+
+run_memtest() {
+    # Find the Alpine-mounted USB FAT32 mount point
+    local usb_mp
+    usb_mp=$(_find_usb_mountpoint)
+    if [ -z "$usb_mp" ]; then
+        MEMTEST_FAIL="USB FAT32 not mounted (no vfat in /proc/mounts)"
+        return 1
+    fi
+
+    # Verify memtest.efi is present
+    if ! [ -f "$usb_mp/boot/memtest.efi" ]; then
+        MEMTEST_FAIL="memtest.efi not found ($usb_mp/boot/memtest.efi)"
+        return 1
+    fi
+
+    # Temporarily remount read-write (Alpine mounts USB read-only)
+    if ! mount -o remount,rw "$usb_mp" 2>/dev/null; then
+        MEMTEST_FAIL="Cannot remount USB read-write ($usb_mp)"
+        return 1
+    fi
+
+    # Write grubenv: GRUB clears this flag before chainloading memtest (no boot loop)
+    _write_grubenv "$usb_mp/grubenv" 1
+    local write_ok=$?
+
+    sync
+    mount -o remount,ro "$usb_mp" 2>/dev/null || true
+
+    if [ "$write_ok" -ne 0 ]; then
+        MEMTEST_FAIL="Failed to write grubenv to $usb_mp"
+        return 1
+    fi
+
+    # Reboot: GRUB reads grubenv, clears flag, then chainloads memtest.efi
+    reboot
 }
 
 # Main
@@ -50,7 +72,7 @@ printf '\033[2J\033[H' > "$TTY" 2>/dev/null
 {
     printf "\n${BOLD}${CYAN}[Memory Test]${RESET}\n\n"
     printf "  Run Memtest86+ to test system RAM.\n\n"
-    printf "  - Memtest86+ starts immediately (no reboot required).\n"
+    printf "  - System reboots into Memtest86+.\n"
     printf "  - After test completes, system reboots back to PCInfo.\n\n"
     printf "  Enter: Start   q: Cancel\n"
 } > "$TTY"
@@ -61,11 +83,11 @@ while true; do
         q|Q) break ;;
         ''|' ')
             printf '\033[2J\033[H' > "$TTY" 2>/dev/null
-            printf "\n${BOLD}${CYAN}[Memory Test]${RESET}\n\nStarting Memtest86+...\n" > "$TTY"
+            printf "\n${BOLD}${CYAN}[Memory Test]${RESET}\n\nRebooting into Memtest86+...\n" > "$TTY"
 
             run_memtest
 
-            # Only reached if kexec failed
+            # Only reached if run_memtest failed
             printf '\033[2J\033[H' > "$TTY" 2>/dev/null
             {
                 printf "\n${BOLD}${CYAN}[Memory Test]${RESET}\n\n"
@@ -80,3 +102,4 @@ while true; do
             ;;
     esac
 done
+
