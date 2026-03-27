@@ -361,7 +361,8 @@ build_apks_dir() {
     # Download additional packages needed by PCInfo
     log "  Downloading additional packages..."
     local pkgs="bash dialog smartmontools nvme-cli pciutils \
-                hdparm util-linux blkid dmidecode eudev"
+                hdparm util-linux blkid dmidecode eudev \
+                json-c libnvme libstdc++ libgcc"
     local ok=0 fail=0
     for pkg in $pkgs; do
         if download_apk "$pkg" "$apks_dir"; then
@@ -506,6 +507,8 @@ build_apkovl() {
     log "=== Building apkovl overlay ==="
     local ovl_dir="$WORK_DIR/apkovl"
     local dmidecode_apk=""
+    local smartmontools_apk=""
+    local nvme_cli_apk=""
     rm -rf "$ovl_dir"
 
     # Directory structure
@@ -629,6 +632,44 @@ SETUP_EOF
         log "  Installed: dmidecode runtime"
     else
         error "Missing dmidecode APK in $WORK_DIR/apks/x86_64"
+    fi
+
+    # Pre-install smartmontools and its C++ runtime dependencies into the overlay.
+    # smartmontools is a C++ program and requires libstdc++/libgcc which are NOT
+    # included in Alpine Standard ISO base packages.
+    for _pkg in libgcc libstdc++ smartmontools; do
+        local _apk
+        _apk=$(find "$WORK_DIR/apks/x86_64" -maxdepth 1 -name "${_pkg}-*.apk" | head -n 1)
+        if [ -n "$_apk" ]; then
+            tar -xzf "$_apk" -C "$ovl_dir" \
+                --exclude='.SIGN.*' \
+                --exclude='.PKGINFO' 2>/dev/null || \
+                error "Failed to extract ${_pkg} into overlay"
+            log "  Installed: ${_pkg} runtime"
+        else
+            error "Missing ${_pkg} APK in $WORK_DIR/apks/x86_64"
+        fi
+    done
+
+    nvme_cli_apk=$(find "$WORK_DIR/apks/x86_64" -maxdepth 1 -name 'nvme-cli-*.apk' | head -n 1)
+    if [ -n "$nvme_cli_apk" ]; then
+        # Extract nvme-cli and its dependencies (json-c, libnvme)
+        for dep_pkg in json-c libnvme; do
+            local dep_apk
+            dep_apk=$(find "$WORK_DIR/apks/x86_64" -maxdepth 1 -name "${dep_pkg}-*.apk" | head -n 1)
+            if [ -n "$dep_apk" ]; then
+                tar -xzf "$dep_apk" -C "$ovl_dir" \
+                    --exclude='.SIGN.*' \
+                    --exclude='.PKGINFO' 2>/dev/null || true
+            fi
+        done
+        tar -xzf "$nvme_cli_apk" -C "$ovl_dir" \
+            --exclude='.SIGN.*' \
+            --exclude='.PKGINFO' 2>/dev/null || \
+            error "Failed to extract nvme-cli into overlay"
+        log "  Installed: nvme-cli runtime"
+    else
+        warn "Missing nvme-cli APK in $WORK_DIR/apks/x86_64 (NVMe health check unavailable)"
     fi
 
     # Install PCInfo scripts
