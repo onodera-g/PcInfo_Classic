@@ -303,37 +303,62 @@ download_alpine_iso() {
 # ---- Step 2: Download memtest86+ ----
 download_memtest() {
     log "=== Downloading Memtest86+ ==="
-    local mt="$WORK_DIR/memtest.efi"
+    local mt_efi="$WORK_DIR/memtest.efi"
+    local mt_bin="$WORK_DIR/memtest.bin"
 
-    # Already have it?
-    if [ -f "$mt" ] && [ -s "$mt" ]; then
-        log "Cached: memtest.efi"
+    # Check if cached binary is a proper bzImage (PE32+ EFI binary cannot be used by kexec)
+    _is_bzimage() { file "$1" 2>/dev/null | grep -q "bzImage"; }
+
+    if [ -s "$mt_efi" ] && [ -s "$mt_bin" ] && _is_bzimage "$mt_bin"; then
+        log "  Cached: memtest.efi + memtest.bin (bzImage)"
         return 0
     fi
 
-    # Try zip first (v7.20+)
-    local zip="$WORK_DIR/memtest.zip"
-    if download_optional \
-        "https://memtest.org/download/v7.20/mt86plus_7.20_64.grub.efi.zip" "$zip"; then
-        mkdir -p "$WORK_DIR/memtest_unzip"
-        unzip -q -o "$zip" -d "$WORK_DIR/memtest_unzip/" 2>/dev/null || true
-        local efi
-        efi=$(find "$WORK_DIR/memtest_unzip" -name "*.efi" 2>/dev/null | head -1)
-        if [ -n "$efi" ]; then
-            cp "$efi" "$mt"
-            log "  memtest86+ extracted: $(basename "$efi")"
-            return 0
+    # Download proper bzImage from Debian package (kexec-compatible).
+    # Alpine 3.21 does not ship memtest86+ in its repos.
+    # The Debian package provides mt86+x64 as a proper Linux bzImage.
+    local deb="$WORK_DIR/memtest86plus.deb"
+    local deb_url="http://ftp.debian.org/debian/pool/main/m/memtest86+/memtest86+_8.00-3_amd64.deb"
+    if ! _is_bzimage "$mt_bin" 2>/dev/null; then
+        if download_optional "$deb_url" "$deb"; then
+            local deb_extract="$WORK_DIR/memtest86plus_deb"
+            rm -rf "$deb_extract" && mkdir -p "$deb_extract"
+            (cd "$deb_extract" && ar x "$deb" && tar -xJf data.tar.xz ./boot/ 2>/dev/null) || true
+            local x64bin="$deb_extract/boot/mt86+x64"
+            if [ -s "$x64bin" ] && _is_bzimage "$x64bin"; then
+                cp "$x64bin" "$mt_bin"
+                log "  memtest.bin: Debian mt86+x64 bzImage (kexec-compatible)"
+            fi
         fi
     fi
 
-    # Try direct EFI (v7.00)
-    if download_optional \
-        "https://memtest.org/download/v7.00/mt86plus_7.00_64.grub.efi" "$mt"; then
-        log "  memtest86+ downloaded (v7.00)"
+    # Download v8.00 EFI binary from memtest.org for GRUB EFI chainloading
+    local zip="$WORK_DIR/memtest.zip"
+    if [ ! -s "$zip" ]; then
+        download_optional "https://memtest.org/download/v8.00/mt86plus_8.00.binaries.zip" "$zip" || true
+    fi
+    if [ -s "$zip" ]; then
+        mkdir -p "$WORK_DIR/memtest_unzip"
+        unzip -q -o "$zip" -d "$WORK_DIR/memtest_unzip/" 2>/dev/null || true
+        local efi_file x86bin
+        efi_file=$(find "$WORK_DIR/memtest_unzip" -name "*.efi" 2>/dev/null | head -1)
+        x86bin=$(find "$WORK_DIR/memtest_unzip" -name "*x86_64*" ! -name "*.zip" 2>/dev/null | head -1)
+        [ -n "$efi_file" ] && cp "$efi_file" "$mt_efi" && log "  memtest.efi: v8.00 EFI (GRUB chainload)"
+        # Fallback: if Debian binary not available, use v8.00 (kexec may fail on UEFI)
+        if ! _is_bzimage "$mt_bin" 2>/dev/null; then
+            [ -n "$x86bin" ] && cp "$x86bin" "$mt_bin" && log "  memtest.bin: v8.00 fallback (kexec may fail on UEFI)"
+        fi
+    fi
+
+    # Final fallback: use same binary for both
+    [ -s "$mt_bin" ] && [ ! -s "$mt_efi" ] && cp "$mt_bin" "$mt_efi"
+    [ -s "$mt_efi" ] && [ ! -s "$mt_bin" ] && cp "$mt_efi" "$mt_bin"
+
+    if [ -s "$mt_bin" ]; then
         return 0
     fi
 
-    warn "memtest86+ download failed - memory test will be unavailable (skipped)"
+    warn "memtest86+ download failed - memory test will be unavailable"
     return 0
 }
 
@@ -362,7 +387,7 @@ build_apks_dir() {
     log "  Downloading additional packages..."
     local pkgs="bash dialog smartmontools nvme-cli pciutils \
                 hdparm util-linux blkid dmidecode eudev \
-                json-c libnvme libstdc++ libgcc"
+                json-c libnvme libstdc++ libgcc kexec-tools xz-libs"
     local ok=0 fail=0
     for pkg in $pkgs; do
         if download_apk "$pkg" "$apks_dir"; then
@@ -568,6 +593,7 @@ EOF
     cat > "$ovl_dir/etc/local.d/00-pcinfo-setup.start" << 'SETUP_EOF'
 #!/bin/sh
 # Install PCInfo tools from pre-downloaded APKs on USB, then mount USB for GPU driver access.
+# Also handles BIOS memtest one-shot: if /memtest_flag exists on USB, kexec into memtest.bin
 USB_MNT="/mnt/usb"
 DEV=""
 
@@ -618,6 +644,8 @@ if is_mounted "$USB_MNT" && [ -d "$APK_DIR" ]; then
         apk add --allow-untrusted --force-non-repository --no-network $pkgs 2>/dev/null || true
     fi
 fi
+
+# (memtest one-shot flag handling removed: menu_memtest.sh uses direct kexec instead)
 
 exit 0
 SETUP_EOF
@@ -672,6 +700,27 @@ SETUP_EOF
         warn "Missing nvme-cli APK in $WORK_DIR/apks/x86_64 (NVMe health check unavailable)"
     fi
 
+    # Pre-install kexec-tools (and its dependency xz-libs) for memtest kexec
+    # We use tar extraction (not apk) so dependencies must be extracted manually.
+    local kexec_apk xz_apk
+    kexec_apk=$(find "$WORK_DIR/apks/x86_64" -maxdepth 1 -name 'kexec-tools-*.apk' | grep -v '\-doc' | head -n 1)
+    xz_apk=$(find "$WORK_DIR/apks/x86_64" -maxdepth 1 -name 'xz-libs-*.apk' | head -n 1)
+    if [ -n "$kexec_apk" ]; then
+        # xz-libs provides liblzma.so.5 which kexec requires
+        if [ -n "$xz_apk" ]; then
+            tar -xzf "$xz_apk" -C "$ovl_dir" \
+                --exclude='.SIGN.*' \
+                --exclude='.PKGINFO' 2>/dev/null || true
+        fi
+        tar -xzf "$kexec_apk" -C "$ovl_dir" \
+            --exclude='.SIGN.*' \
+            --exclude='.PKGINFO' 2>/dev/null || \
+            error "Failed to extract kexec-tools into overlay"
+        log "  Installed: kexec-tools runtime"
+    else
+        warn "Missing kexec-tools APK - memtest kexec will be unavailable"
+    fi
+
     # Install PCInfo scripts
     local scripts="common.sh menu.sh menu_pcinfo.sh menu_storage.sh menu_gpu.sh menu_memtest.sh pcinfo.sh"
     for s in $scripts; do
@@ -724,7 +773,7 @@ EOF
     grub-mkstandalone \
         -O x86_64-efi \
         -o "$efi_out" \
-        --modules="fat linux linuxefi normal boot chain configfile echo ls search search_label search_fs_uuid efi_gop efi_uga part_gpt part_msdos" \
+        --modules="fat linux linuxefi normal boot chain configfile echo ls search search_label search_fs_uuid efi_gop efi_uga part_gpt part_msdos test loadenv" \
         "boot/grub/grub.cfg=${stub_cfg}" \
         2>/dev/null
 
@@ -773,7 +822,11 @@ build_fat32_image() {
     # Copy memtest86+
     if [ -f "$WORK_DIR/memtest.efi" ]; then
         mcopy -i "$OUTPUT_IMG" "$WORK_DIR/memtest.efi" ::/boot/memtest.efi
-        log "  Memtest86+ copied"
+        log "  Memtest86+ EFI copied"
+    fi
+    if [ -f "$WORK_DIR/memtest.bin" ]; then
+        mcopy -i "$OUTPUT_IMG" "$WORK_DIR/memtest.bin" ::/boot/memtest.bin
+        log "  Memtest86+ BIN copied"
     fi
 
     # Copy apkovl
@@ -806,19 +859,14 @@ build_fat32_image() {
     mcopy -i "$OUTPUT_IMG" "$efi_bin" ::/EFI/BOOT/BOOTX64.EFI
     log "  BOOTX64.EFI copied"
 
-    # GRUB EFI config (external, modifiable for memtest reboot)
+    # GRUB EFI config: always boot PCInfo (Alpine) immediately.
+    # Memtest one-shot is handled via /memtest_flag on USB + kexec in 00-pcinfo-setup.start,
+    # which works identically for both EFI and BIOS systems.
     local grub_cfg="$WORK_DIR/grub.cfg"
-    local has_memtest=false
-    [ -f "$WORK_DIR/memtest.efi" ] && has_memtest=true
 
     cat > "$grub_cfg" << GRUB_EOF
 set default="pcinfo"
-set timeout=5
-
-if [ -f (\$root)/EFI/BOOT/grubenv ]; then
-  load_env --file (\$root)/EFI/BOOT/grubenv
-  set default=\${saved_entry}
-fi
+set timeout=0
 
 menuentry "PCInfo Classic" --id pcinfo {
     linuxefi  /boot/vmlinuz-lts modloop=/boot/modloop-lts modules=${BOOT_MODULES} quiet alpine_repo=/media/usb/apks,/media/sda/apks,/media/sdb/apks,/media/mmcblk0p1/apks,/media/LABEL=${USB_LABEL}/apks usbdelay=3
@@ -827,32 +875,15 @@ menuentry "PCInfo Classic" --id pcinfo {
 
 GRUB_EOF
 
-    if $has_memtest; then
-        cat >> "$grub_cfg" << 'MEMTEST_EOF'
-menuentry "Memtest86+" --id memtest {
-    save_env --file (hd0)/EFI/BOOT/grubenv saved_entry=pcinfo
-    chainloader /boot/memtest.efi
-}
-MEMTEST_EOF
-    fi
-
     mcopy -i "$OUTPUT_IMG" "$grub_cfg" ::/EFI/BOOT/grub.cfg
     log "  grub.cfg copied"
-
-    # Create grubenv (1024 bytes, padded with #)
-    local grubenv_file="$WORK_DIR/grubenv"
-    dd if=/dev/zero bs=1024 count=1 2>/dev/null | tr '\000' '#' > "$grubenv_file"
-    printf '# GRUB Environment Block\nsaved_entry=pcinfo\n' | \
-        dd of="$grubenv_file" conv=notrunc 2>/dev/null
-    mcopy -i "$OUTPUT_IMG" "$grubenv_file" ::/EFI/BOOT/grubenv
-    log "  grubenv copied"
 
     # Syslinux config (BIOS boot)
     local syslinux_cfg="$WORK_DIR/syslinux.cfg"
     cat > "$syslinux_cfg" << SYSLINUX_EOF
 DEFAULT pcinfo
-TIMEOUT 50
-PROMPT 1
+TIMEOUT 0
+PROMPT 0
 
 LABEL pcinfo
   MENU LABEL PCInfo Classic (Alpine Linux)
@@ -861,14 +892,6 @@ LABEL pcinfo
   APPEND modloop=/boot/modloop-lts modules=${BOOT_MODULES} quiet alpine_repo=/media/usb/apks,/media/sda/apks,/media/sdb/apks,/media/mmcblk0p1/apks,/media/LABEL=${USB_LABEL}/apks usbdelay=3
 
 SYSLINUX_EOF
-
-    if $has_memtest; then
-        cat >> "$syslinux_cfg" << 'SYSLINUX_MEMTEST_EOF'
-LABEL memtest
-  MENU LABEL Memtest86+
-  KERNEL /boot/memtest.efi
-SYSLINUX_MEMTEST_EOF
-    fi
 
     mcopy -i "$OUTPUT_IMG" "$syslinux_cfg" ::/syslinux.cfg
     log "  syslinux.cfg copied"
