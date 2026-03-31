@@ -35,12 +35,12 @@ run_memtest() {
         fi
     done
 
-    # Include memory map for diagnosis
+    # Include memory map for diagnosis (show first 12 lines of /proc/iomem)
     local iomem_low
-    iomem_low=$(awk '/^0+0+-0*[89a][0-9a-f]/ {print $0}' /proc/iomem 2>/dev/null | head -5)
+    iomem_low=$(grep -E "^[0-9a-f]" /proc/iomem 2>/dev/null | head -12)
     MEMTEST_FAIL="kexec -l failed: $err"
     [ -n "$iomem_low" ] && MEMTEST_FAIL="$MEMTEST_FAIL
-iomem(low): $iomem_low"
+iomem: $iomem_low"
 
     return 1
 }

@@ -869,7 +869,7 @@ set default="pcinfo"
 set timeout=0
 
 menuentry "PCInfo Classic" --id pcinfo {
-    linuxefi  /boot/vmlinuz-lts modloop=/boot/modloop-lts modules=${BOOT_MODULES} quiet alpine_repo=/media/usb/apks,/media/sda/apks,/media/sdb/apks,/media/mmcblk0p1/apks,/media/LABEL=${USB_LABEL}/apks usbdelay=3
+    linuxefi  /boot/vmlinuz-lts modloop=/boot/modloop-lts modules=${BOOT_MODULES} quiet alpine_repo=/media/usb/apks,/media/sda/apks,/media/sdb/apks,/media/mmcblk0p1/apks,/media/LABEL=${USB_LABEL}/apks usbdelay=3 memmap=640K@0
     initrdefi /boot/initramfs-lts
 }
 
@@ -889,7 +889,7 @@ LABEL pcinfo
   MENU LABEL PCInfo Classic (Alpine Linux)
   KERNEL /boot/vmlinuz-lts
   INITRD /boot/initramfs-lts
-  APPEND modloop=/boot/modloop-lts modules=${BOOT_MODULES} quiet alpine_repo=/media/usb/apks,/media/sda/apks,/media/sdb/apks,/media/mmcblk0p1/apks,/media/LABEL=${USB_LABEL}/apks usbdelay=3
+  APPEND modloop=/boot/modloop-lts modules=${BOOT_MODULES} quiet alpine_repo=/media/usb/apks,/media/sda/apks,/media/sdb/apks,/media/mmcblk0p1/apks,/media/LABEL=${USB_LABEL}/apks usbdelay=3 memmap=640K@0
 
 SYSLINUX_EOF
 
