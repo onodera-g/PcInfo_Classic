@@ -237,6 +237,87 @@ first_dmidecode_processor_value() {
     '
 }
 
+first_dmidecode_baseboard_value() {
+    command -v dmidecode >/dev/null 2>&1 || return 1
+    dmidecode -t 2 2>/dev/null | awk -F ':' -v key="$1" '
+        BEGIN { in_block=0 }
+        /^Base Board Information$/ { in_block=1; next }
+        /^Handle / {
+            if (in_block) exit
+            next
+        }
+        in_block {
+            field=$1
+            sub(/^[[:space:]]+/, "", field)
+            sub(/[[:space:]]+$/, "", field)
+            if (field == key) {
+                value=substr($0, index($0, ":") + 1)
+                sub(/^[[:space:]]+/, "", value)
+                print value
+                exit
+            }
+        }
+    '
+}
+
+first_dmidecode_bios_value() {
+    command -v dmidecode >/dev/null 2>&1 || return 1
+    dmidecode -t 0 2>/dev/null | awk -F ':' -v key="$1" '
+        BEGIN { in_block=0 }
+        /^BIOS Information$/ { in_block=1; next }
+        /^Handle / {
+            if (in_block) exit
+            next
+        }
+        in_block {
+            field=$1
+            sub(/^[[:space:]]+/, "", field)
+            sub(/[[:space:]]+$/, "", field)
+            if (field == key) {
+                value=substr($0, index($0, ":") + 1)
+                sub(/^[[:space:]]+/, "", value)
+                print value
+                exit
+            }
+        }
+    '
+}
+
+get_motherboard_model() {
+    local manufacturer="" product="" value=""
+    manufacturer=$(first_dmidecode_baseboard_value "Manufacturer")
+    product=$(first_dmidecode_baseboard_value "Product Name")
+    case "$manufacturer" in
+        ''|'Not Specified'|'Unknown'|'To Be Filled By O.E.M.') manufacturer="" ;;
+    esac
+    case "$product" in
+        ''|'Not Specified'|'Unknown'|'To Be Filled By O.E.M.') product="" ;;
+    esac
+    value=$(join_display_fields "$manufacturer" "$product")
+    [ -n "$value" ] || value=$(na)
+    trim_value "$value"
+}
+
+get_bios_version() {
+    local value=""
+    value=$(first_dmidecode_bios_value "Version")
+    case "$value" in
+        ''|'Not Specified'|'Unknown') value="" ;;
+    esac
+    [ -n "$value" ] || value=$(na)
+    trim_value "$value"
+}
+
+get_bios_release_date() {
+    local value=""
+    value=$(first_dmidecode_bios_value "Release Date")
+    case "$value" in
+        ''|'Not Specified'|'Unknown') value="" ;;
+    esac
+    [ -n "$value" ] || value=$(na)
+    trim_value "$value"
+}
+
 get_cpu_model_name() {
     local value=""
 
@@ -587,6 +668,15 @@ item "Cores" "$(get_cpu_core_count)"
 item "Threads" "$(get_cpu_thread_count)"
 item "Stepping" "$(get_cpu_stepping)"
 item "Family / Model" "$(get_cpu_family_model)"
+
+# ============================================================
+# Motherboard
+# ============================================================
+section "Motherboard"
+
+item "Model" "$(get_motherboard_model)"
+item "BIOS Version" "$(get_bios_version)"
+item "BIOS Date" "$(get_bios_release_date)"
 
 # ============================================================
 # Memory
