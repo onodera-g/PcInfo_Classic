@@ -104,14 +104,22 @@ download_optional() {
 # Download a single .apk from Alpine repository (with retry on mirror)
 ensure_apk_indexes() {
     local apkindex="$WORK_DIR/APKINDEX_main.tar.gz"
-    if [ ! -s "$apkindex" ]; then
-        wget -q -O "$apkindex" "${ALPINE_REPO_MAIN}/APKINDEX.tar.gz" || \
-            { warn "Cannot fetch main APKINDEX"; return 1; }
+    local apkindex_tmp="${apkindex}.tmp"
+    if wget -q -O "$apkindex_tmp" "${ALPINE_REPO_MAIN}/APKINDEX.tar.gz"; then
+        mv "$apkindex_tmp" "$apkindex"
+    else
+        rm -f "$apkindex_tmp"
+        [ -s "$apkindex" ] || { warn "Cannot fetch main APKINDEX"; return 1; }
+        warn "Cannot refresh main APKINDEX; using cached copy"
     fi
     local apkindex2="$WORK_DIR/APKINDEX_comm.tar.gz"
-    if [ ! -s "$apkindex2" ]; then
-        wget -q -O "$apkindex2" "${ALPINE_REPO_COMM}/APKINDEX.tar.gz" || \
-            { warn "Cannot fetch community APKINDEX"; return 1; }
+    local apkindex2_tmp="${apkindex2}.tmp"
+    if wget -q -O "$apkindex2_tmp" "${ALPINE_REPO_COMM}/APKINDEX.tar.gz"; then
+        mv "$apkindex2_tmp" "$apkindex2"
+    else
+        rm -f "$apkindex2_tmp"
+        [ -s "$apkindex2" ] || { warn "Cannot fetch community APKINDEX"; return 1; }
+        warn "Cannot refresh community APKINDEX; using cached copy"
     fi
 }
 

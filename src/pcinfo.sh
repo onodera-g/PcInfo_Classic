@@ -7,7 +7,7 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 item() {
     local label="$1" val="$2"
-    printf "  %-22s: %s\n" "$label" "$val"
+    render_item "$label" "$val"
 }
 
 group_title() {
@@ -20,7 +20,7 @@ indented_group_title() {
 
 subitem() {
     local label="$1" val="$2"
-    printf "  %-22s: %s\n" "$label" "$val"
+    render_item "$label" "$val"
 }
 
 section() {

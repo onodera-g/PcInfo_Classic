@@ -14,7 +14,7 @@ group_title() {
 item() {
     local label="$1"
     local val="$2"
-    printf "  %-22s: %b\n" "$label" "$val"
+    render_item_escaped "$label" "$val"
 }
 
 # Detect GPU PCI vendor IDs present in the system
@@ -389,11 +389,11 @@ fi
     [ -n "$_old_printk" ] && echo "$_old_printk" > /proc/sys/kernel/printk 2>/dev/null
 
     sleep 1
+    invalidate_display_layout
+    update_pagination_layout
     printf "\n"
     show_gpu_info
-    printf "\n${SEP}\nPress any key to return\n"
-} > "$TTY"
+    printf "\n"
+} | show_paged_blocks
 
 unmount_usb
-
-wait_any_key

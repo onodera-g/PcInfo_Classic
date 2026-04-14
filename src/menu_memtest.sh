@@ -6,7 +6,7 @@
 MEMTEST_FAIL=""
 
 item() {
-    printf "  %-22s: %b\n" "$1" "$2"
+    render_item_escaped "$1" "$2"
 }
 
 # Write a 1024-byte GRUB environment block to $1 with memtest_next=$2
@@ -118,4 +118,3 @@ while true; do
             ;;
     esac
 done
-

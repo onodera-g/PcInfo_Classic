@@ -2,7 +2,13 @@
 # common.sh - Shared variables and functions (sourced by all menu scripts)
 
 TTY=/dev/tty1
-LINES_PER_PAGE=40
+DEFAULT_LINES_PER_PAGE=20
+LINES_PER_PAGE=$DEFAULT_LINES_PER_PAGE
+DEFAULT_TTY_COLS=80
+TTY_COLS=$DEFAULT_TTY_COLS
+ITEM_LABEL_WIDTH=22
+DISPLAY_LAYOUT_READY=0
+ESC=$(printf '\033')
 
 # ANSI colors
 CYAN='\033[0;36m'
@@ -34,10 +40,205 @@ wait_any_key() {
     read_key || true
 }
 
+get_tty_rows() {
+    _size=$(stty size < "$TTY" 2>/dev/null) || return 1
+    _rows=$(printf '%s\n' "$_size" | awk '{print $1}')
+    _cols=$(printf '%s\n' "$_size" | awk '{print $2}')
+    [ -n "$_rows" ] || return 1
+    [ -n "$_cols" ] || return 1
+    case "$_rows" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "$_rows" -gt 0 ] || return 1
+    printf '%s\n' "$_rows"
+}
+
+get_tty_cols() {
+    _size=$(stty size < "$TTY" 2>/dev/null) || return 1
+    _rows=$(printf '%s\n' "$_size" | awk '{print $1}')
+    _cols=$(printf '%s\n' "$_size" | awk '{print $2}')
+    [ -n "$_rows" ] || return 1
+    [ -n "$_cols" ] || return 1
+    case "$_cols" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "$_cols" -gt 0 ] || return 1
+    printf '%s\n' "$_cols"
+}
+
+update_pagination_layout() {
+    _rows=$(get_tty_rows 2>/dev/null)
+    _cols=$(get_tty_cols 2>/dev/null)
+    if [ -n "$_rows" ]; then
+        if [ "$_rows" -gt 6 ]; then
+            LINES_PER_PAGE=$((_rows - 4))
+        else
+            LINES_PER_PAGE=$_rows
+        fi
+    else
+        LINES_PER_PAGE=$DEFAULT_LINES_PER_PAGE
+    fi
+
+    if [ -n "$_cols" ]; then
+        TTY_COLS=$_cols
+    else
+        TTY_COLS=$DEFAULT_TTY_COLS
+    fi
+
+    case "$TTY_COLS" in
+        ''|*[!0-9]*) TTY_COLS=$DEFAULT_TTY_COLS ;;
+    esac
+
+    if [ "$TTY_COLS" -ge 72 ]; then
+        ITEM_LABEL_WIDTH=22
+    elif [ "$TTY_COLS" -ge 56 ]; then
+        ITEM_LABEL_WIDTH=18
+    elif [ "$TTY_COLS" -ge 44 ]; then
+        ITEM_LABEL_WIDTH=14
+    elif [ "$TTY_COLS" -ge 32 ]; then
+        ITEM_LABEL_WIDTH=10
+    elif [ "$TTY_COLS" -ge 24 ]; then
+        ITEM_LABEL_WIDTH=8
+    else
+        ITEM_LABEL_WIDTH=6
+    fi
+
+    _sep_width=$TTY_COLS
+    [ "$_sep_width" -lt 8 ] && _sep_width=8
+    SEP=$(printf '%*s' "$_sep_width" '' | tr ' ' '-')
+    DISPLAY_LAYOUT_READY=1
+}
+
+invalidate_display_layout() {
+    DISPLAY_LAYOUT_READY=0
+}
+
+ensure_display_layout() {
+    [ "${DISPLAY_LAYOUT_READY:-0}" -eq 1 ] && return 0
+    update_pagination_layout
+}
+
+wrap_plain_text_to_width() {
+    _width="$1"
+    awk -v width="$_width" '
+        function emit_word_chunks(word,    part) {
+            while (length(word) > width) {
+                print substr(word, 1, width)
+                word = substr(word, width + 1)
+            }
+            if (word != "") {
+                print word
+            }
+        }
+        {
+            if ($0 == "") {
+                print ""
+                next
+            }
+            line = ""
+            count = split($0, words, /[[:space:]]+/)
+            for (i = 1; i <= count; i++) {
+                word = words[i]
+                if (word == "") {
+                    continue
+                }
+                if (length(word) > width) {
+                    if (line != "") {
+                        print line
+                        line = ""
+                    }
+                    emit_word_chunks(word)
+                    continue
+                }
+                if (line == "") {
+                    line = word
+                } else if (length(line) + 1 + length(word) <= width) {
+                    line = line " " word
+                } else {
+                    print line
+                    line = word
+                }
+            }
+            if (line != "") {
+                print line
+            }
+        }
+    '
+}
+
+print_wrapped_line() {
+    _prefix="$1"
+    _next_prefix="$2"
+    _value="$3"
+    _format="$4"
+    _width="$5"
+    _printed=0
+
+    case "$_value" in
+        *"$ESC"*)
+            if [ "$_format" = "b" ]; then
+                printf '%s%b\n' "$_prefix" "$_value"
+            else
+                printf '%s%s\n' "$_prefix" "$_value"
+            fi
+            return
+            ;;
+    esac
+
+    if [ -z "$_value" ]; then
+        printf '%s\n' "$_prefix"
+        return
+    fi
+
+    printf '%s\n' "$_value" | wrap_plain_text_to_width "$_width" | while IFS= read -r _line || [ -n "$_line" ]; do
+        if [ "$_printed" -eq 0 ]; then
+            _current_prefix=$_prefix
+            _printed=1
+        else
+            _current_prefix=$_next_prefix
+        fi
+        if [ "$_format" = "b" ]; then
+            printf '%s%b\n' "$_current_prefix" "$_line"
+        else
+            printf '%s%s\n' "$_current_prefix" "$_line"
+        fi
+    done
+}
+
+render_item_value() {
+    ensure_display_layout
+    _label="$1"
+    _value="$2"
+    _format="${3:-s}"
+
+    if [ "$TTY_COLS" -le $((ITEM_LABEL_WIDTH + 12)) ]; then
+        printf '  %s:\n' "$_label"
+        _value_width=$((TTY_COLS - 4))
+        [ "$_value_width" -lt 8 ] && _value_width=8
+        print_wrapped_line '    ' '    ' "$_value" "$_format" "$_value_width"
+        return
+    fi
+
+    _prefix=$(printf '  %-*s: ' "$ITEM_LABEL_WIDTH" "$_label")
+    _next_prefix=$(printf '  %-*s  ' "$ITEM_LABEL_WIDTH" '')
+    _value_width=$((TTY_COLS - ITEM_LABEL_WIDTH - 4))
+    [ "$_value_width" -lt 8 ] && _value_width=8
+    print_wrapped_line "$_prefix" "$_next_prefix" "$_value" "$_format" "$_value_width"
+}
+
+render_item() {
+    render_item_value "$1" "$2" s
+}
+
+render_item_escaped() {
+    render_item_value "$1" "$2" b
+}
+
 # Display stdin content page by page (LINES_PER_PAGE lines per page)
 # Enter: next page / q: return to top on last page
 show_paged() {
     _content=$(cat)
+    update_pagination_layout
     _total=$(printf '%s\n' "$_content" | wc -l)
     _start=1
     while true; do
@@ -66,6 +267,7 @@ show_paged_blocks() {
     }
     _input="$_tmpdir/input.txt"
     cat > "$_input"
+    update_pagination_layout
 
     awk -v max="$LINES_PER_PAGE" -v dir="$_tmpdir" '
         function is_blank(idx) {

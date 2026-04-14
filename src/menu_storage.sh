@@ -3,8 +3,6 @@
 
 . /opt/pcinfo/common.sh
 
-SEP='----------------------------------------'
-
 section() {
     printf "${BOLD}${CYAN}[%s]${RESET}\n" "$1"
 }
@@ -12,7 +10,7 @@ section() {
 item() {
     local label="$1"
     local value="$2"
-    printf "  %-22s: %b\n" "$label" "$value"
+    render_item_escaped "$label" "$value"
 }
 
 trim_value() {
