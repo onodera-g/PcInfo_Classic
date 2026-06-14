@@ -16,7 +16,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC_DIR="$SCRIPT_DIR/../src"
 WORK_DIR="$SCRIPT_DIR/work_alpine"
 OUTPUT_IMG="$SCRIPT_DIR/pcinfo-classic.img"
-GPU_DRIVERS_DIR="$SCRIPT_DIR/drivers"
 GPU_PCI_IDS_BUILD_FILE="$WORK_DIR/gpu_pci_ids.txt"
 GPU_PCI_SUBSYSTEM_IDS_BUILD_FILE="$WORK_DIR/gpu_pci_subsystem_ids.txt"
 
@@ -33,7 +32,13 @@ IMG_SIZE_MB=512
 
 # USB volume label - used by the generated FAT32 image
 USB_LABEL="PCINFO"
-BOOT_MODULES="loop,squashfs,sd-mod,usb-storage,vfat,fat,nls_cp437,nls_iso8859-1,amdgpu,radeon,nouveau,i915,fbcon"
+BOOT_MODULES="loop,squashfs,sd-mod,usb-storage,vfat,fat,nls_cp437,nls_iso8859-1,fbcon,drm,drm_kms_helper,ttm,radeon,amdgpu,nouveau,i915"
+
+# GPU-related kernel parameters applied at boot so KMS handoff happens
+# during initramfs (before console takeover). Avoids post-boot modprobe
+# black-screen issues on older Radeon (RV770/RV790 etc., freedesktop bug 70165)
+# and ensures consistent modesetting on all supported vendors.
+GPU_KERNEL_PARAMS="radeon.modeset=1 radeon.dpm=0 radeon.aspm=0 radeon.audio=0 radeon.hw_i2c=1 radeon.no_wb=1 radeon.tv=0 nouveau.modeset=1 i915.modeset=1 fbcon=map:0 video=DVI-I-1:1920x1080@60 video=DVI-I-2:1920x1080@60 video=DVI-I-3:1920x1080@60 video=DVI-D-1:1920x1080@60 video=DVI-D-2:1920x1080@60 video=DVI-D-3:1920x1080@60 video=DVI-A-1:1920x1080@60"
 
 # ---- Logging ----
 log()   { echo "[build] $*" >&2; }
@@ -48,7 +53,6 @@ calc_image_size_mb() {
 
     [ -d "$WORK_DIR/netboot" ] && payload_bytes=$((payload_bytes + $(du -sb "$WORK_DIR/netboot" | cut -f1)))
     [ -d "$WORK_DIR/apks" ] && payload_bytes=$((payload_bytes + $(du -sb "$WORK_DIR/apks" | cut -f1)))
-    [ -d "$GPU_DRIVERS_DIR" ] && payload_bytes=$((payload_bytes + $(du -sb "$GPU_DRIVERS_DIR" | cut -f1)))
     [ -f "$ovl_tar" ] && payload_bytes=$((payload_bytes + $(stat -c '%s' "$ovl_tar")))
     [ -f "$efi_bin" ] && payload_bytes=$((payload_bytes + $(stat -c '%s' "$efi_bin")))
     [ -f "$WORK_DIR/memtest.efi" ] && memtest_bytes=$(stat -c '%s' "$WORK_DIR/memtest.efi")
@@ -239,38 +243,6 @@ download_apk() {
     download_apk_file "$repo" "$resolved_pkg" "$ver" "$dest_dir"
 }
 
-download_apk_recursive() {
-    local pkg="$1" dest_dir="$2" state_dir="$3"
-    local dep normalized record repo resolved_pkg ver deps provides
-    local visited="$state_dir/visited.txt"
-
-    normalized=$(normalize_apk_dep "$pkg")
-    [ -n "$normalized" ] || return 0
-
-    if [ -f "$visited" ] && grep -qxF "$normalized" "$visited" 2>/dev/null; then
-        return 0
-    fi
-    printf '%s\n' "$normalized" >> "$visited"
-
-    record=$(resolve_apk_record "$normalized")
-    if [ -z "$record" ]; then
-        warn "Dependency not found in APKINDEX: $normalized"
-        return 1
-    fi
-
-    IFS=$'\t' read -r repo resolved_pkg ver deps provides <<< "$record"
-    [ "$deps" = "-" ] && deps=""
-    [ "$provides" = "-" ] && provides=""
-    download_apk_file "$repo" "$resolved_pkg" "$ver" "$dest_dir" || return 1
-
-    for dep in $deps; do
-        case "$dep" in
-            \!*) continue ;;
-        esac
-        download_apk_recursive "$dep" "$dest_dir" "$state_dir" || return 1
-    done
-}
-
 # ---- Step 1: Download Alpine standard ISO and extract boot files ----
 # The standard ISO's initramfs includes USB storage drivers (netboot does not).
 download_alpine_iso() {
@@ -394,8 +366,8 @@ build_apks_dir() {
     # Download additional packages needed by PCInfo
     log "  Downloading additional packages..."
     local pkgs="bash dialog smartmontools nvme-cli pciutils \
-                hdparm util-linux blkid dmidecode eudev \
-                json-c libnvme libstdc++ libgcc kexec-tools xz-libs"
+                hdparm util-linux blkid dmidecode eudev kmod \
+                json-c libnvme libstdc++ libgcc kexec-tools xz-libs zstd-libs"
     local ok=0 fail=0
     for pkg in $pkgs; do
         if download_apk "$pkg" "$apks_dir"; then
@@ -413,40 +385,7 @@ build_apks_dir() {
     log "  apks/ ready: $(ls "$apks_dir"/*.apk 2>/dev/null | wc -l) total packages"
 }
 
-# ---- Step 4: Fetch offline GPU driver APKs without Docker ----
-fetch_gpu_driver_apks() {
-    log "=== Fetching offline GPU driver APKs ==="
-    local vendor
-    local state_dir="$WORK_DIR/gpu_fetch_state"
-
-    rm -rf "$state_dir"
-    mkdir -p "$GPU_DRIVERS_DIR/nvidia" "$GPU_DRIVERS_DIR/amd" "$GPU_DRIVERS_DIR/intel"
-    mkdir -p "$state_dir/amd" "$state_dir/nvidia" "$state_dir/intel"
-    rm -f "$GPU_DRIVERS_DIR"/nvidia/*.apk "$GPU_DRIVERS_DIR"/amd/*.apk "$GPU_DRIVERS_DIR"/intel/*.apk
-
-    log "  AMD packages: linux-firmware-amdgpu linux-firmware-radeon xf86-video-amdgpu mesa-dri-gallium"
-    for pkg in linux-firmware-amdgpu linux-firmware-radeon xf86-video-amdgpu mesa-dri-gallium; do
-        download_apk_recursive "$pkg" "$GPU_DRIVERS_DIR/amd" "$state_dir/amd" || \
-            error "Failed to fetch AMD GPU driver APKs"
-    done
-
-    log "  NVIDIA packages: linux-firmware-nvidia xf86-video-nouveau mesa-dri-gallium"
-    for pkg in linux-firmware-nvidia xf86-video-nouveau mesa-dri-gallium; do
-        download_apk_recursive "$pkg" "$GPU_DRIVERS_DIR/nvidia" "$state_dir/nvidia" || \
-            error "Failed to fetch NVIDIA GPU driver APKs"
-    done
-
-    log "  Intel packages: linux-firmware-intel xf86-video-intel mesa-dri-gallium"
-    for pkg in linux-firmware-intel xf86-video-intel mesa-dri-gallium; do
-        download_apk_recursive "$pkg" "$GPU_DRIVERS_DIR/intel" "$state_dir/intel" || \
-            error "Failed to fetch Intel GPU driver APKs"
-    done
-
-    for vendor in nvidia amd intel; do
-        log "  drivers/$vendor: $(find "$GPU_DRIVERS_DIR/$vendor" -maxdepth 1 -name '*.apk' | wc -l) package(s)"
-    done
-}
-
+# ---- Step 4: Build GPU PCI ID database ----
 build_gpu_pci_db() {
     log "=== Building GPU PCI ID database ==="
     local pci_ids_raw="$WORK_DIR/pci.ids"
@@ -643,7 +582,7 @@ fi
 APK_DIR="$USB_MNT/apks/x86_64"
 if is_mounted "$USB_MNT" && [ -d "$APK_DIR" ]; then
     pkgs=""
-    for f in bash dialog smartmontools nvme-cli pciutils hdparm util-linux blkid dmidecode eudev; do
+    for f in bash dialog smartmontools nvme-cli pciutils hdparm util-linux blkid dmidecode eudev kmod; do
         found=$(find "$APK_DIR" -name "${f}-[0-9]*.apk" 2>/dev/null | head -1)
         [ -n "$found" ] && pkgs="$pkgs $found"
     done
@@ -706,6 +645,33 @@ SETUP_EOF
         log "  Installed: nvme-cli runtime"
     else
         warn "Missing nvme-cli APK in $WORK_DIR/apks/x86_64 (NVMe health check unavailable)"
+    fi
+
+    # Pre-install kmod and the libraries required by its full modprobe/modinfo tools.
+    for _pkg in libcrypto3 xz-libs zlib zstd-libs kmod; do
+        local _apk
+        _apk=$(find "$WORK_DIR/apks/x86_64" -maxdepth 1 -name "${_pkg}-*.apk" | head -n 1)
+        if [ -n "$_apk" ]; then
+            tar -xzf "$_apk" -C "$ovl_dir" \
+                --exclude='.SIGN.*' \
+                --exclude='.PKGINFO' 2>/dev/null || \
+                error "Failed to extract ${_pkg} into overlay"
+            log "  Installed: ${_pkg} runtime"
+        else
+            error "Missing ${_pkg} APK in $WORK_DIR/apks/x86_64"
+        fi
+    done
+
+    # Pre-install util-linux (provides blkid/findfs/lsblk/mount helpers).
+    util_linux_apk=$(find "$WORK_DIR/apks/x86_64" -maxdepth 1 -name 'util-linux-*.apk' | head -n 1)
+    if [ -n "$util_linux_apk" ]; then
+        tar -xzf "$util_linux_apk" -C "$ovl_dir" \
+            --exclude='.SIGN.*' \
+            --exclude='.PKGINFO' 2>/dev/null || \
+            error "Failed to extract util-linux into overlay"
+        log "  Installed: util-linux runtime"
+    else
+        error "Missing util-linux APK in $WORK_DIR/apks/x86_64"
     fi
 
     # Pre-install kexec-tools and its runtime dependencies for memtest kexec.
@@ -848,10 +814,6 @@ build_fat32_image() {
     mmd -i "$OUTPUT_IMG" ::/boot         2>/dev/null || true
     mmd -i "$OUTPUT_IMG" ::/apks         2>/dev/null || true
     mmd -i "$OUTPUT_IMG" ::/apks/x86_64  2>/dev/null || true
-    mmd -i "$OUTPUT_IMG" ::/drivers      2>/dev/null || true
-    mmd -i "$OUTPUT_IMG" ::/drivers/nvidia 2>/dev/null || true
-    mmd -i "$OUTPUT_IMG" ::/drivers/amd  2>/dev/null || true
-    mmd -i "$OUTPUT_IMG" ::/drivers/intel 2>/dev/null || true
 
     # Copy kernel files
     mcopy -i "$OUTPUT_IMG" "$nb/vmlinuz-lts"   ::/boot/vmlinuz-lts
@@ -885,16 +847,6 @@ build_fat32_image() {
     fi
     log "  apks/: $apk_count package(s) copied"
 
-    # Copy offline GPU driver directories recursively with mtools only
-    if [ -d "$GPU_DRIVERS_DIR" ]; then
-        mcopy -s -n -i "$OUTPUT_IMG" \
-            "$GPU_DRIVERS_DIR/nvidia" \
-            "$GPU_DRIVERS_DIR/amd" \
-            "$GPU_DRIVERS_DIR/intel" \
-            ::/drivers/
-        log "  drivers/: $(find "$GPU_DRIVERS_DIR" -name '*.apk' | wc -l) package(s) copied recursively"
-    fi
-
     # EFI bootloader
     mcopy -i "$OUTPUT_IMG" "$efi_bin" ::/EFI/BOOT/BOOTX64.EFI
     log "  BOOTX64.EFI copied"
@@ -920,7 +872,7 @@ if [ "\${memtest_next}" = "1" ]; then
 fi
 
 menuentry "PCInfo Classic" --id pcinfo {
-    linuxefi  /boot/vmlinuz-lts modloop=/boot/modloop-lts modules=${BOOT_MODULES} quiet alpine_repo=/media/usb/apks,/media/sda/apks,/media/sdb/apks,/media/mmcblk0p1/apks,/media/LABEL=${USB_LABEL}/apks usbdelay=3
+    linuxefi  /boot/vmlinuz-lts modloop=/boot/modloop-lts modules=${BOOT_MODULES} ${GPU_KERNEL_PARAMS} quiet alpine_repo=/media/usb/apks,/media/sda/apks,/media/sdb/apks,/media/mmcblk0p1/apks,/media/LABEL=${USB_LABEL}/apks usbdelay=3
     initrdefi /boot/initramfs-lts
 }
 
@@ -955,7 +907,7 @@ LABEL pcinfo
   MENU LABEL PCInfo Classic (Alpine Linux)
   KERNEL /boot/vmlinuz-lts
   INITRD /boot/initramfs-lts
-  APPEND modloop=/boot/modloop-lts modules=${BOOT_MODULES} quiet alpine_repo=/media/usb/apks,/media/sda/apks,/media/sdb/apks,/media/mmcblk0p1/apks,/media/LABEL=${USB_LABEL}/apks usbdelay=3 memmap=640K@0
+  APPEND modloop=/boot/modloop-lts modules=${BOOT_MODULES} ${GPU_KERNEL_PARAMS} quiet alpine_repo=/media/usb/apks,/media/sda/apks,/media/sdb/apks,/media/mmcblk0p1/apks,/media/LABEL=${USB_LABEL}/apks usbdelay=3 memmap=640K@0
 
 SYSLINUX_EOF
 
@@ -1008,7 +960,6 @@ main() {
     download_alpine_iso
     download_memtest
     build_apks_dir
-    fetch_gpu_driver_apks
     build_gpu_pci_db
 
     local ovl_tar
@@ -1030,11 +981,6 @@ main() {
     log ""
     log " Write to USB using Rufus (DD mode)"
     log " USB label must be: ${USB_LABEL}"
-    log ""
-    log " Offline GPU driver APKs embedded from:"
-    log "   $GPU_DRIVERS_DIR/nvidia"
-    log "   $GPU_DRIVERS_DIR/amd"
-    log "   $GPU_DRIVERS_DIR/intel"
     log ""
 }
 

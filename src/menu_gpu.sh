@@ -1,5 +1,16 @@
 #!/bin/sh
-# menu_gpu.sh - GPU Driver Test (offline, on-demand via USB .apk files)
+# menu_gpu.sh - GPU Driver Test
+#
+# All GPU kernel modules (radeon, amdgpu, nouveau, i915) and their firmware
+# are shipped inside Alpine's modloop-lts and pre-loaded at boot via the
+# `modules=` kernel parameter and the radeon-specific quirks in cmdline
+# (radeon.dpm=0, radeon.audio=0 etc.) defined in build_alpine.sh. This menu
+# therefore only inspects the result.
+#
+# When the simple-framebuffer / efi-framebuffer platform driver still owns
+# the aperture (and the PCI GPU is therefore not bound to its real driver
+# yet), `recover_gpu_bindings` releases it and triggers a PCI re-probe so
+# the appropriate DRM driver can take over.
 
 . /opt/pcinfo/common.sh
 
@@ -17,301 +28,236 @@ item() {
     render_item_escaped "$label" "$val"
 }
 
-# Detect GPU PCI vendor IDs present in the system
-detect_gpu_vendors() {
-    for dev in /sys/bus/pci/devices/*; do
-        [ -d "$dev" ] || continue
-        class=$(cat "$dev/class" 2>/dev/null)
-        case "$class" in
-            0x030000|0x030001|0x030002|0x030200|0x038000) ;;
-            *) continue ;;
-        esac
-        cat "$dev/vendor" 2>/dev/null
-    done | sort -u
+is_gpu_class() {
+    case "$1" in
+        0x030000|0x030001|0x030002|0x030200|0x038000) return 0 ;;
+    esac
+    return 1
 }
 
-gpu_devices_by_vendor() {
-    local want_vendor="$1"
+detect_gpu_devices() {
     local dev=""
     local class=""
-    local vendor=""
 
     for dev in /sys/bus/pci/devices/*; do
         [ -d "$dev" ] || continue
         class=$(cat "$dev/class" 2>/dev/null)
-        case "$class" in
-            0x030000|0x030001|0x030002|0x030200|0x038000) ;;
-            *) continue ;;
-        esac
-        vendor=$(cat "$dev/vendor" 2>/dev/null)
-        [ "$vendor" = "$want_vendor" ] && printf '%s\n' "$dev"
+        is_gpu_class "$class" && printf '%s\n' "$dev"
     done
 }
 
-vendor_driver_bound() {
-    local want_vendor="$1"
-    local want_driver="$2"
-    local dev=""
-    local bound_driver=""
+expected_module_for_vendor() {
+    case "$1" in
+        0x1002) printf '%s\n' 'amdgpu/radeon' ;;
+        0x10de) printf '%s\n' 'nouveau' ;;
+        0x8086) printf '%s\n' 'i915' ;;
+        *)      printf '%s\n' 'unknown' ;;
+    esac
+}
 
-    for dev in $(gpu_devices_by_vendor "$want_vendor"); do
-        if [ -L "$dev/driver" ]; then
-            bound_driver=$(basename "$(readlink "$dev/driver" 2>/dev/null)")
-            [ "$bound_driver" = "$want_driver" ] && return 0
+bound_driver_for() {
+    local dev_path="$1"
+    [ -L "$dev_path/driver" ] || return 1
+    basename "$(readlink "$dev_path/driver" 2>/dev/null)"
+}
+
+module_loaded() {
+    grep -q "^$1[[:space:]]" /proc/modules 2>/dev/null
+}
+
+# Candidate kernel modules for a given PCI vendor.
+candidate_modules_for_vendor() {
+    case "$1" in
+        0x1002) printf 'amdgpu radeon\n' ;;
+        0x10de) printf 'nouveau\n' ;;
+        0x8086) printf 'i915\n' ;;
+    esac
+}
+
+# Resolve the right module for the device using its modalias when modprobe
+# is available; fall back to the vendor-wide candidate list.
+target_modules_for_device() {
+    local dev_path="$1"
+    local vendor=""
+    local modalias=""
+    local out=""
+
+    vendor=$(cat "$dev_path/vendor" 2>/dev/null)
+    if command -v modprobe >/dev/null 2>&1 && [ -r "$dev_path/modalias" ]; then
+        modalias=$(cat "$dev_path/modalias" 2>/dev/null)
+        if [ -n "$modalias" ]; then
+            out=$(modprobe -R "$modalias" 2>/dev/null \
+                | grep -E '^(amdgpu|radeon|nouveau|i915)$' \
+                | tr '\n' ' ')
+            if [ -n "$out" ]; then
+                printf '%s\n' "${out% }"
+                return 0
+            fi
         fi
+    fi
+    candidate_modules_for_vendor "$vendor"
+}
+
+# Unbind simpledrm/efi-framebuffer so the real GPU driver can claim the
+# aperture on rebind.
+release_simple_framebuffer() {
+    local entry=""
+    local sysfs_driver=""
+    local id=""
+
+    for entry in /sys/bus/platform/drivers/simple-framebuffer \
+                 /sys/bus/platform/drivers/efi-framebuffer; do
+        [ -d "$entry" ] || continue
+        for id in "$entry"/*; do
+            [ -L "$id" ] || continue
+            case "$(basename "$id")" in bind|unbind|uevent|module) continue ;; esac
+            printf '%s\n' "$(basename "$id")" > "$entry/unbind" 2>/dev/null || true
+        done
+    done
+
+    # /sys/class/drm/card0 may also be backed by simpledrm; that is removed
+    # automatically once the platform driver above is unbound.
+    sysfs_driver=$(readlink /sys/class/drm/card0/device/driver 2>/dev/null | xargs basename 2>/dev/null)
+    [ -n "$sysfs_driver" ] && printf '  simpledrm release attempted (was: %s)\n' "$sysfs_driver"
+}
+
+# Try to make the right kernel module bind to dev_path.
+attempt_module_bind() {
+    local dev_path="$1"
+    local slot=""
+    local mod=""
+    local mods=""
+    local bound=""
+
+    slot=$(basename "$dev_path")
+    mods=$(target_modules_for_device "$dev_path")
+    [ -n "$mods" ] || return 1
+
+    for mod in $mods; do
+        if module_loaded "$mod"; then
+            printf '  %s: already loaded\n' "$mod"
+        else
+            printf '  modprobe %s ... ' "$mod"
+            if modprobe "$mod" 2>/tmp/menu_gpu.modprobe.err; then
+                printf '%bok%b\n' "$GREEN" "$RESET"
+            else
+                printf '%bfail%b\n' "$RED" "$RESET"
+                sed 's/^/    /' /tmp/menu_gpu.modprobe.err 2>/dev/null
+                continue
+            fi
+        fi
+
+        bound=$(bound_driver_for "$dev_path" 2>/dev/null || true)
+        if [ "$bound" = "$mod" ]; then
+            printf '  %s: bound to %s\n' "$slot" "$mod"
+            return 0
+        fi
+
+        # Free the simple/efi framebuffer that might still own the aperture,
+        # then ask the PCI core to (re-)probe this device.
+        release_simple_framebuffer
+        if [ -w /sys/bus/pci/drivers_probe ]; then
+            printf '%s\n' "$slot" > /sys/bus/pci/drivers_probe 2>/dev/null || true
+        fi
+        bound=$(bound_driver_for "$dev_path" 2>/dev/null || true)
+        if [ "$bound" = "$mod" ]; then
+            printf '  %s: bound to %s after rebind\n' "$slot" "$mod"
+            return 0
+        fi
+        printf '  %s: %s loaded but did not bind\n' "$slot" "$mod"
     done
     return 1
 }
 
-reprobe_vendor_devices() {
-    local want_vendor="$1"
-    local dev=""
-    local slot=""
-
-    [ -w /sys/bus/pci/drivers_probe ] || return 0
-    for dev in $(gpu_devices_by_vendor "$want_vendor"); do
-        [ -L "$dev/driver" ] && continue
-        slot=$(basename "$dev")
-        printf '%s\n' "$slot" > /sys/bus/pci/drivers_probe 2>/dev/null || true
+show_cmdline_and_modules() {
+    section "Boot state"
+    if [ -r /proc/cmdline ]; then
+        printf "  cmdline: "
+        tr -d '\n' < /proc/cmdline
+        printf '\n'
+    fi
+    printf "  loaded GPU modules:"
+    local loaded=""
+    for m in amdgpu radeon nouveau i915 drm drm_kms_helper ttm simpledrm; do
+        module_loaded "$m" && loaded="$loaded $m"
     done
+    if [ -n "$loaded" ]; then
+        printf '%s\n' "$loaded"
+    else
+        printf ' %bnone%b\n' "$RED" "$RESET"
+    fi
 }
 
-# Install GPU drivers from pre-downloaded .apk files on USB
-install_firmware_apks() {
-    local firmware_root="/lib/firmware"
-    local firmware_apk=""
-    local extract_dir=""
-
-    [ "$#" -gt 0 ] || return 0
-
-    printf "  Installing firmware payloads...\n"
-
-    if [ -L "$firmware_root" ] || [ -f "$firmware_root" ]; then
-        rm -f "$firmware_root" || {
-            printf "  ${RED}Failed to prepare %s${RESET}\n" "$firmware_root"
-            return 1
-        }
+show_dmesg_for_gpu() {
+    section "dmesg (GPU related, tail 40)"
+    local matches=""
+    matches=$(dmesg 2>/dev/null \
+        | grep -E '(radeon|amdgpu|nouveau|i915|drm|simpledrm|simple-framebuffer|efifb|firmware)' \
+        | tail -n 40)
+    if [ -n "$matches" ]; then
+        printf '%s\n' "$matches" | sed 's/^/  /'
+    else
+        printf "  ${YELLOW}(no matching dmesg lines)${RESET}\n"
     fi
-    mkdir -p "$firmware_root" || {
-        printf "  ${RED}Failed to create %s${RESET}\n" "$firmware_root"
-        return 1
-    }
-
-    for firmware_apk in "$@"; do
-        extract_dir=$(mktemp -d) || {
-            printf "  ${RED}Failed to create temporary extraction directory${RESET}\n"
-            return 1
-        }
-
-        if tar -xf "$firmware_apk" -C "$extract_dir" >/dev/null 2>&1 && [ -d "$extract_dir/lib/firmware" ]; then
-            cp -a "$extract_dir/lib/firmware/." "$firmware_root"/ >/dev/null 2>&1 || {
-                rm -rf "$extract_dir"
-                printf "  ${RED}Failed to copy firmware from %s${RESET}\n" "$(basename "$firmware_apk")"
-                return 1
-            }
-            printf "  Firmware OK: %s\n" "$(basename "$firmware_apk")"
-        else
-            rm -rf "$extract_dir"
-            printf "  ${RED}Failed to extract firmware from %s${RESET}\n" "$(basename "$firmware_apk")"
-            return 1
-        fi
-
-        rm -rf "$extract_dir"
-    done
-
-    return 0
 }
 
-install_gpu_drivers() {
-    local vendor="$1"
-    local driver_dir=""
-    local vendor_name=""
-    local repo_file=""
-    local apk_count=0
-    local install_log=""
-    local regular_apks=""
-    local firmware_apks=""
-    local apk=""
-
-    case "$vendor" in
-        0x10de) driver_dir="$USB_MOUNT/drivers/nvidia"; vendor_name="NVIDIA (nouveau)" ;;
-        0x1002) driver_dir="$USB_MOUNT/drivers/amd";   vendor_name="AMD (amdgpu/radeon)" ;;
-        0x8086) driver_dir="$USB_MOUNT/drivers/intel"; vendor_name="Intel (i915)" ;;
-        *)
-            printf "  Unknown vendor: %s\n" "$vendor"
-            return 1
-            ;;
-    esac
-
-    printf "  Vendor: ${BOLD}%s${RESET}\n" "$vendor_name"
-    printf "  Driver dir: %s\n\n" "$driver_dir"
-
-    if [ ! -d "$driver_dir" ]; then
-        printf "  ${YELLOW}Directory not found: %s${RESET}\n" "$driver_dir"
-        printf "  Please prepare .apk files using: apk fetch -R -o %s <packages>\n" "$driver_dir"
-        return 1
-    fi
-
-    set -- "$driver_dir"/*.apk
-    if [ ! -e "$1" ]; then
-        printf "  ${YELLOW}No .apk files found in %s${RESET}\n" "$driver_dir"
-        return 1
-    fi
-    apk_count=$#
-    if [ "$apk_count" -eq 0 ]; then
-        printf "  ${YELLOW}No .apk files found in %s${RESET}\n" "$driver_dir"
-        return 1
-    fi
-
-    printf "  Installing %d package(s) from USB...\n" "$apk_count"
-    for apk in "$@"; do
-        case "$(basename "$apk")" in
-            linux-firmware-*.apk)
-                firmware_apks="$firmware_apks $apk"
-                ;;
-            *)
-                regular_apks="$regular_apks $apk"
+# Try to load missing modules and rebind unbound GPUs.
+recover_gpu_bindings() {
+    section "Recovery attempt"
+    local dev driver
+    local any_attempted=0
+    for dev in $(detect_gpu_devices); do
+        driver=$(bound_driver_for "$dev" 2>/dev/null || true)
+        case "$driver" in
+            amdgpu|radeon|nouveau|i915)
+                continue
                 ;;
         esac
+        any_attempted=1
+        printf "  Trying %s ...\n" "$(basename "$dev")"
+        attempt_module_bind "$dev" || true
     done
+    [ "$any_attempted" -eq 0 ] && printf "  ${GREEN}All GPUs already bound, nothing to do${RESET}\n"
+}
 
-    repo_file=$(mktemp) || {
-        printf "  ${RED}Failed to create temporary repositories file${RESET}\n"
+show_dri_devices() {
+    section "DRM devices"
+    if ! ls /dev/dri/card* >/dev/null 2>&1; then
+        printf "  ${RED}No /dev/dri/card* device found${RESET}\n"
+        printf "  ${RED}[NG] No GPU driver bound at boot${RESET}\n"
         return 1
-    }
-    install_log=$(mktemp) || {
-        rm -f "$repo_file"
-        printf "  ${RED}Failed to create temporary log file${RESET}\n"
-        return 1
-    }
-
-    if [ -n "$regular_apks" ]; then
-        # shellcheck disable=SC2086
-        if apk add --allow-untrusted --force-non-repository --no-network --repositories-file "$repo_file" $regular_apks \
-            >"$install_log" 2>&1; then
-            grep -E '(Installing|Executing|OK:|WARNING:)' "$install_log" | sed 's/^/  /'
-        else
-            grep -E '(Installing|Executing|ERROR:|error:|WARNING:)' "$install_log" | sed 's/^/  /'
-            printf "  ${RED}Install failed${RESET}\n"
-            rm -f "$install_log" "$repo_file"
-            return 1
-        fi
     fi
-
-    if [ -n "$firmware_apks" ]; then
-        # shellcheck disable=SC2086
-        if ! install_firmware_apks $firmware_apks; then
-            printf "  ${RED}Install failed${RESET}\n"
-            rm -f "$install_log" "$repo_file"
-            return 1
-        fi
-    fi
-
-    printf "  ${GREEN}Install OK${RESET}\n"
-    rm -f "$install_log" "$repo_file"
+    local card card_num drm_drv
+    for card in /dev/dri/card*; do
+        card_num=$(basename "$card")
+        drm_drv=""
+        [ -L "/sys/class/drm/$card_num/device/driver" ] && \
+            drm_drv=$(basename "$(readlink "/sys/class/drm/$card_num/device/driver" 2>/dev/null)")
+        printf "  %s -> ${GREEN}%s${RESET}\n" "$card" "${drm_drv:-present}"
+    done
+    printf "  ${GREEN}[OK] DRM device(s) available${RESET}\n"
     return 0
 }
 
-# Load kernel module(s) for the detected vendor
-load_gpu_module() {
-    local vendor="$1"
-    local modprobe_log=""
-    case "$vendor" in
-        0x10de)
-            modprobe_log=$(mktemp) || modprobe_log=""
-            modprobe drm 2>/dev/null
-            modprobe drm_kms_helper 2>/dev/null
-            modprobe ttm 2>/dev/null
-            modprobe fbcon 2>/dev/null
-            if modprobe nouveau >"${modprobe_log:-/dev/null}" 2>&1; then
-                reprobe_vendor_devices "$vendor"
-            fi
-            if vendor_driver_bound "$vendor" nouveau; then
-                printf "  ${GREEN}nouveau: loaded${RESET}\n"
-            else
-                printf "  ${YELLOW}nouveau: skipped${RESET}\n"
-                [ -n "$modprobe_log" ] && grep -m1 -E '.' "$modprobe_log" | sed 's/^/    /'
-            fi
-            [ -n "$modprobe_log" ] && rm -f "$modprobe_log"
-            ;;
-        0x1002)
-            modprobe_log=$(mktemp) || modprobe_log=""
-            modprobe drm 2>/dev/null
-            modprobe drm_kms_helper 2>/dev/null
-            modprobe ttm 2>/dev/null
-            modprobe fbcon 2>/dev/null
-            if modprobe amdgpu >"${modprobe_log:-/dev/null}" 2>&1; then
-                reprobe_vendor_devices "$vendor"
-            fi
-            if vendor_driver_bound "$vendor" amdgpu; then
-                printf "  ${GREEN}amdgpu: loaded${RESET}\n"
-            else
-                : > "${modprobe_log:-/dev/null}"
-                if modprobe radeon >>"${modprobe_log:-/dev/null}" 2>&1; then
-                    reprobe_vendor_devices "$vendor"
-                fi
-            fi
-            if vendor_driver_bound "$vendor" radeon; then
-                printf "  ${GREEN}radeon: loaded${RESET}\n"
-            elif vendor_driver_bound "$vendor" amdgpu; then
-                :
-            else
-                printf "  ${YELLOW}amd drm: skipped${RESET}\n"
-                [ -n "$modprobe_log" ] && grep -m1 -E '.' "$modprobe_log" | sed 's/^/    /'
-            fi
-            [ -n "$modprobe_log" ] && rm -f "$modprobe_log"
-            ;;
-        0x8086)
-            modprobe_log=$(mktemp) || modprobe_log=""
-            modprobe drm 2>/dev/null
-            modprobe drm_kms_helper 2>/dev/null
-            modprobe fbcon 2>/dev/null
-            if modprobe i915 >"${modprobe_log:-/dev/null}" 2>&1; then
-                reprobe_vendor_devices "$vendor"
-            fi
-            if vendor_driver_bound "$vendor" i915; then
-                printf "  ${GREEN}i915: loaded${RESET}\n"
-            else
-                printf "  ${YELLOW}i915: skipped${RESET}\n"
-                [ -n "$modprobe_log" ] && grep -m1 -E '.' "$modprobe_log" | sed 's/^/    /'
-            fi
-            [ -n "$modprobe_log" ] && rm -f "$modprobe_log"
-            ;;
-    esac
+show_framebuffer() {
+    section "Framebuffer"
+    if [ -r /proc/fb ] && [ -s /proc/fb ]; then
+        sed 's/^/  /' /proc/fb
+    else
+        printf "  ${YELLOW}No framebuffer registered${RESET}\n"
+    fi
 }
 
-# Display GPU detection results
-show_gpu_info() {
-    section "Result"
-
-    if ls /dev/dri/card* >/dev/null 2>&1; then
-        for card in /dev/dri/card*; do
-            local drm_drv=""
-            local card_num
-            card_num=$(basename "$card")
-            [ -L "/sys/class/drm/$card_num/device/driver" ] && \
-                drm_drv=$(basename "$(readlink /sys/class/drm/$card_num/device/driver 2>/dev/null)")
-            printf "  %s -> ${GREEN}%s${RESET}\n" "$card" "${drm_drv:-present}"
-        done
-        printf "  ${GREEN}[OK] Graphics output available${RESET}\n"
-    else
-        printf "  ${RED}No DRM device found${RESET}\n"
-        printf "  ${RED}[NG] Graphics output unavailable${RESET}\n"
-    fi
-
-    printf "\n"
+show_gpus() {
+    section "Detected GPUs"
 
     local gpu_count=0
-    for dev in /sys/bus/pci/devices/*; do
-        [ -d "$dev" ] || continue
-        class=$(cat "$dev/class" 2>/dev/null)
-        case "$class" in
-            0x030000|0x030001|0x030002|0x030200|0x038000) ;;
-            *) continue ;;
-        esac
+    local dev vendor device_id subsystem_vendor subsystem_device
+    local pci_slot vendor_name gpu_model gpu_vram gpu_slot_label
+    local driver expected driver_text
 
+    for dev in $(detect_gpu_devices); do
         gpu_count=$((gpu_count + 1))
-        local vendor device_id subsystem_vendor subsystem_device pci_slot vendor_name driver gpu_model gpu_vram gpu_slot_label driver_text
 
         vendor=$(cat "$dev/vendor" 2>/dev/null)
         device_id=$(cat "$dev/device" 2>/dev/null)
@@ -321,21 +267,21 @@ show_gpu_info() {
         vendor_name=$(get_pci_vendor_name "$vendor")
         gpu_model=$(get_pci_gpu_model "$pci_slot" "$vendor" "$device_id" "$vendor_name" "$subsystem_vendor" "$subsystem_device")
 
-        driver=""
-        [ -L "$dev/driver" ] && driver=$(basename "$(readlink "$dev/driver" 2>/dev/null)")
+        driver=$(bound_driver_for "$dev" 2>/dev/null || true)
+        expected=$(expected_module_for_vendor "$vendor")
         gpu_vram=$(get_pci_gpu_vram "$dev" "$pci_slot" "$vendor" "$device_id" "$driver" "$subsystem_vendor" "$subsystem_device")
         gpu_slot_label=$(get_pci_slot_label "$dev" "$pci_slot")
 
         if [ -n "$driver" ]; then
             driver_text="${GREEN}${driver}${RESET}"
         else
-            driver_text="${RED}not loaded${RESET}"
+            driver_text="${RED}not bound (expected: ${expected})${RESET}"
         fi
 
         group_title "GPU $gpu_count"
-        item "Slot" "$gpu_slot_label"
-        item "Model" "$gpu_model"
-        item "VRAM" "$gpu_vram"
+        item "Slot"   "$gpu_slot_label"
+        item "Model"  "$gpu_model"
+        item "VRAM"   "$gpu_vram"
         item "Driver" "$driver_text"
         printf "\n"
     done
@@ -347,53 +293,22 @@ show_gpu_info() {
 printf '\033[2J\033[H' > "$TTY" 2>/dev/null
 {
     printf "\n${BOLD}${CYAN}[GPU Test]${RESET}\n\n"
-    printf "  Detecting GPU...\n"
-} > "$TTY"
+    printf "  Inspecting GPU driver state...\n\n"
 
-vendors=$(detect_gpu_vendors)
+    show_cmdline_and_modules
+    show_gpus
+    recover_gpu_bindings
+    printf "\n"
+    show_gpus
+    show_dri_devices
+    show_framebuffer
+    show_dmesg_for_gpu
 
-if [ -z "$vendors" ]; then
-    printf "\n  ${RED}No GPU detected in this system.${RESET}\n\n${SEP}\nPress any key to return\n" > "$TTY"
-    wait_any_key
-    exit 0
-fi
+    printf "\n"
+} > "$TTY" 2>&1
 
-# Mount USB
-printf "  Mounting USB (LABEL=PCINFO)...\n" > "$TTY"
-if ! mount_usb; then
-    printf "  ${RED}USB not found. Cannot load drivers.${RESET}\n\n${SEP}\nPress any key to return\n" > "$TTY"
-    wait_any_key
-    exit 0
-fi
-
-# Install drivers for each detected GPU vendor
 {
-    for v in $vendors; do
-        install_gpu_drivers "$v"
-    done
-
-    printf "  Waiting for device initialization..."
-    sleep 2
-    printf " done\n"
-
-    # Load modules (suppress kernel printk to avoid blank lines on TTY)
-    printf "  Loading kernel modules...\n"
-    _old_printk=""
-    if [ -r /proc/sys/kernel/printk ]; then
-        read -r _old_printk _ < /proc/sys/kernel/printk
-        echo 0 > /proc/sys/kernel/printk 2>/dev/null
-    fi
-    for v in $vendors; do
-        load_gpu_module "$v"
-    done
-    [ -n "$_old_printk" ] && echo "$_old_printk" > /proc/sys/kernel/printk 2>/dev/null
-
-    sleep 1
-    invalidate_display_layout
-    update_pagination_layout
-    printf "\n"
-    show_gpu_info
-    printf "\n"
-} | show_paged_blocks
-
-unmount_usb
+    printf "\n${SEP}\nPress any key to return\n"
+} > "$TTY"
+wait_any_key
+exit 0
