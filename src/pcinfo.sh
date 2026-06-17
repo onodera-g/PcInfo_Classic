@@ -748,6 +748,7 @@ for dev in /sys/bus/pci/devices/*; do
     [ -L "$dev/driver" ] && drv=$(basename "$(readlink "$dev/driver" 2>/dev/null)")
     [ -z "$drv" ] && drv="none"
     gpu_vram=$(get_pci_gpu_vram "$dev" "0000:$slot" "$vendor" "$dev_id" "$drv" "$subsystem_vendor" "$subsystem_device")
+    gpu_subsys=$(get_pci_subsystem_display_text "0000:$slot" "$subsystem_vendor" "$subsystem_device")
     gpu_slot_label=$(get_pci_slot_label "$dev" "0000:$slot")
     gpu_link_width=$(get_pci_link_width "$dev" "0000:$slot")
     [ "$gpu_count" -gt 1 ] && printf '\n'
@@ -755,12 +756,14 @@ for dev in /sys/bus/pci/devices/*; do
         indented_group_title "GPU $gpu_count"
         subitem "Slot" "$gpu_slot_label"
         subitem "Model" "$gpu_model"
+        [ -n "$gpu_subsys" ] && subitem "Subsys" "$gpu_subsys"
         subitem "VRAM" "$(normalize_vram_text "$gpu_vram")"
         subitem "Driver" "$drv"
         subitem "PCIe Link" "$gpu_link_width"
     else
         item "Slot" "$gpu_slot_label"
         item "Model" "$gpu_model"
+        [ -n "$gpu_subsys" ] && item "Subsys" "$gpu_subsys"
         item "VRAM" "$(normalize_vram_text "$gpu_vram")"
         item "Driver" "$drv"
         item "PCIe Link" "$gpu_link_width"

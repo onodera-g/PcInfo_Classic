@@ -248,13 +248,23 @@ show_framebuffer() {
     fi
 }
 
+get_gpu_max_sclk() {
+    local dev="$1"
+    local line=""
+    [ -r "$dev/pp_dpm_sclk" ] || return 0
+    line=$(awk '$0 ~ /[0-9]+[Mm][Hh][Zz]/ { last=$0 } END { print last }' "$dev/pp_dpm_sclk" 2>/dev/null)
+    [ -n "$line" ] || return 0
+    printf '%s\n' "$line" | sed -n 's/.*[: ]\([0-9]\{1,\}[Mm][Hh][Zz]\).*/\1/p'
+}
+
 show_gpus() {
     section "Detected GPUs"
 
     local gpu_count=0
     local dev vendor device_id subsystem_vendor subsystem_device
-    local pci_slot vendor_name gpu_model gpu_vram gpu_slot_label
+    local pci_slot pci_short vendor_name gpu_model gpu_vram gpu_slot_label
     local driver expected driver_text
+    local pci_id_text subsys_id_text subsys_label max_sclk
 
     for dev in $(detect_gpu_devices); do
         gpu_count=$((gpu_count + 1))
@@ -264,6 +274,7 @@ show_gpus() {
         subsystem_vendor=$(cat "$dev/subsystem_vendor" 2>/dev/null)
         subsystem_device=$(cat "$dev/subsystem_device" 2>/dev/null)
         pci_slot=$(basename "$dev")
+        pci_short=${pci_slot#0000:}
         vendor_name=$(get_pci_vendor_name "$vendor")
         gpu_model=$(get_pci_gpu_model "$pci_slot" "$vendor" "$device_id" "$vendor_name" "$subsystem_vendor" "$subsystem_device")
 
@@ -272,6 +283,15 @@ show_gpus() {
         gpu_vram=$(get_pci_gpu_vram "$dev" "$pci_slot" "$vendor" "$device_id" "$driver" "$subsystem_vendor" "$subsystem_device")
         gpu_slot_label=$(get_pci_slot_label "$dev" "$pci_slot")
 
+        pci_id_text="$(strip_pci_hex_prefix "$vendor"):$(strip_pci_hex_prefix "$device_id")"
+        if [ -n "$subsystem_vendor" ] && [ -n "$subsystem_device" ]; then
+            subsys_id_text="$(strip_pci_hex_prefix "$subsystem_vendor"):$(strip_pci_hex_prefix "$subsystem_device")"
+        else
+            subsys_id_text=""
+        fi
+        subsys_label=$(get_pci_subsystem_label "$pci_short")
+        max_sclk=$(get_gpu_max_sclk "$dev")
+
         if [ -n "$driver" ]; then
             driver_text="${GREEN}${driver}${RESET}"
         else
@@ -279,10 +299,14 @@ show_gpus() {
         fi
 
         group_title "GPU $gpu_count"
-        item "Slot"   "$gpu_slot_label"
-        item "Model"  "$gpu_model"
-        item "VRAM"   "$gpu_vram"
-        item "Driver" "$driver_text"
+        item "Slot"     "$gpu_slot_label"
+        item "Model"    "$gpu_model"
+        item "PCI ID"   "$pci_id_text"
+        [ -n "$subsys_id_text" ] && item "Subsys ID"  "$subsys_id_text"
+        [ -n "$subsys_label" ]   && item "Subsys"     "$subsys_label"
+        item "VRAM"     "$gpu_vram"
+        [ -n "$max_sclk" ]       && item "Max SCLK"   "$max_sclk"
+        item "Driver"   "$driver_text"
         printf "\n"
     done
 
