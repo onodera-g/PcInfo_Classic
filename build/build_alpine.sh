@@ -753,6 +753,13 @@ PYEOF
         error "Missing generated GPU PCI subsystem database: $GPU_PCI_SUBSYSTEM_IDS_BUILD_FILE"
     fi
 
+    if [ -f "$WORK_DIR/pci.ids" ]; then
+        cp "$WORK_DIR/pci.ids" "$ovl_dir/opt/pcinfo/pci.ids"
+        log "  Installed: pci.ids"
+    else
+        error "Missing official pci.ids: $WORK_DIR/pci.ids"
+    fi
+
     # Symlink: /opt/pcinfo/menu.sh as entrypoint
     ln -sf /opt/pcinfo/menu.sh "$ovl_dir/opt/pcinfo/start"
 
