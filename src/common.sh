@@ -21,6 +21,7 @@ RESET='\033[0m'
 SEP='----------------------------------------'
 GPU_PCI_IDS_FILE="/opt/pcinfo/gpu_pci_ids.txt"
 GPU_PCI_SUBSYSTEM_IDS_FILE="/opt/pcinfo/gpu_pci_subsystem_ids.txt"
+PCI_IDS_FILE="/opt/pcinfo/pci.ids"
 
 # Read a single key from TTY (raw mode)
 read_key() {
@@ -479,6 +480,155 @@ normalize_gpu_model_name() {
     [ -n "$model" ] && printf '%s\n' "$model"
 }
 
+strip_pci_hex_prefix() {
+    printf '%s\n' "${1#0x}"
+}
+
+get_pci_subsystem_label() {
+    local pci_slot="$1"
+    local pci_short=""
+
+    pci_short=$(printf '%s\n' "$pci_slot" | sed 's/^0000://')
+    command -v lspci >/dev/null 2>&1 || return 0
+    lspci -v -s "$pci_short" 2>/dev/null | awk -F': ' '
+        /^[[:space:]]*Subsystem:/ {
+            sub(/^[[:space:]]+/, "", $2)
+            print $2
+            exit
+        }
+    '
+}
+
+lookup_pci_vendor_label() {
+    local vendor_id="$1"
+
+    [ -f "$PCI_IDS_FILE" ] || return 1
+    vendor_id=$(printf '%s\n' "${vendor_id#0x}" | tr '[:upper:]' '[:lower:]')
+    awk -v vendor="$vendor_id" '
+        /^[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]  / {
+            id=tolower(substr($0, 1, 4))
+            if (id == vendor) {
+                name=substr($0, 7)
+                sub(/^[[:space:]]+/, "", name)
+                sub(/[[:space:]]+$/, "", name)
+                print name
+                exit
+            }
+        }
+    ' "$PCI_IDS_FILE"
+}
+
+get_pci_subsystem_display_text() {
+    local pci_slot="$1"
+    local subsystem_vendor="$2"
+    local subsystem_device="$3"
+    local label=""
+
+    if [ -n "$subsystem_vendor" ]; then
+        label=$(lookup_pci_vendor_label "$subsystem_vendor" 2>/dev/null)
+        if [ -n "$label" ]; then
+            printf '%s\n' "$label"
+            return 0
+        fi
+    fi
+
+    label=$(get_pci_subsystem_label "$pci_slot")
+    if [ -n "$label" ]; then
+        label=$(printf '%s\n' "$label" | sed 's/[[:space:]]*Device[[:space:]].*$//')
+        printf '%s\n' "$label"
+        return 0
+    fi
+
+    if [ -n "$subsystem_vendor" ] && [ -n "$subsystem_device" ]; then
+        printf '%s:%s\n' "$(strip_pci_hex_prefix "$subsystem_vendor")" "$(strip_pci_hex_prefix "$subsystem_device")"
+    fi
+}
+
+get_amd_active_cu_count() {
+    local pci_slot="$1"
+    local pci_short=""
+    local drm_card=""
+    local dmesg_text=""
+    local cu_count=""
+
+    pci_short=$(printf '%s\n' "$pci_slot" | sed 's/^0000://')
+    drm_card=$(printf '%s\n' "$pci_short" | awk -F '[:.]' '{ print ($1 * 16) + $2 }')
+
+    dmesg_text=$(dmesg 2>/dev/null | grep -E "active_cu_number|CU per SH|amdgpu .*${pci_short}|amdgpu .*card${drm_card}" | tail -n 80)
+    cu_count=$(printf '%s\n' "$dmesg_text" | sed -n \
+        -e 's/.*active_cu_number[[:space:]]\{1,\}\([0-9][0-9]*\).*/\1/p' \
+        -e 's/.*amdgpu: \([0-9][0-9]*\) CU per SH.*/\1/p' | tail -n 1)
+
+    case "$cu_count" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+
+    printf '%s\n' "$cu_count"
+}
+
+get_amd_gpu_model_from_cu_vram() {
+    local pci_slot="$1"
+    local vram_text="$2"
+    local cu_count=""
+    local vram_mb=""
+
+    cu_count=$(get_amd_active_cu_count "$pci_slot" 2>/dev/null) || return 1
+    vram_mb=$(printf '%s\n' "$vram_text" | sed -n \
+        -e 's/^\([0-9][0-9]*\)[[:space:]]*GB$/\1/p' \
+        -e 's/^\([0-9][0-9]*\)[[:space:]]*MB$/\1/p')
+
+    case "$vram_text" in
+        *GB)
+            vram_mb=$((vram_mb * 1000))
+            ;;
+    esac
+
+    case "$cu_count:$vram_mb" in
+        40:8[0-9][0-9][0-9]|40:9[0-9][0-9][0-9]) printf '%s\n' 'Radeon RX 5700 XT' ;;
+        36:8[0-9][0-9][0-9]|36:9[0-9][0-9][0-9]) printf '%s\n' 'Radeon RX 5700' ;;
+        36:5[0-9][0-9][0-9]|36:6[0-9][0-9][0-9]) printf '%s\n' 'Radeon RX 5600 XT' ;;
+        32:5[0-9][0-9][0-9]|32:6[0-9][0-9][0-9]) printf '%s\n' 'Radeon RX 5600' ;;
+        *) return 1 ;;
+    esac
+}
+
+refine_amd_gpu_model_name() {
+    local pci_slot="$1"
+    local vendor="$2"
+    local device_id="$3"
+    local gpu_name="$4"
+    local dev_path=""
+    local driver=""
+    local vram_text=""
+    local refined=""
+
+    [ "$vendor" = "0x1002" ] || {
+        printf '%s\n' "$gpu_name"
+        return 0
+    }
+
+    case "$device_id:$gpu_name" in
+        0x731f:*RX\ 5600\ OEM/5600\ XT\ /\ 5700/5700\ XT*)
+            ;;
+        *)
+            printf '%s\n' "$gpu_name"
+            return 0
+            ;;
+    esac
+
+    dev_path="/sys/bus/pci/devices/$pci_slot"
+    if [ -L "$dev_path/driver" ]; then
+        driver=$(basename "$(readlink "$dev_path/driver" 2>/dev/null)")
+    else
+        driver="none"
+    fi
+    vram_text=$(get_pci_gpu_vram "$dev_path" "$pci_slot" "$vendor" "$device_id" "$driver" "" "")
+    refined=$(get_amd_gpu_model_from_cu_vram "$pci_slot" "$vram_text" 2>/dev/null) || refined=""
+    [ -n "$refined" ] && gpu_name="$refined"
+
+    printf '%s\n' "$gpu_name"
+}
+
 join_display_fields() {
     local out=""
 
@@ -534,7 +684,14 @@ get_pci_gpu_model() {
 
     pci_short=$(printf '%s\n' "$pci_slot" | sed 's/^0000://')
 
-    if command -v lspci > /dev/null 2>&1; then
+    # Prefer subsystem (SVID:SSID) lookup first so ambiguous shared device IDs
+    # (e.g. Navi 10 0x731f used for RX 5600/5600 XT/5700/5700 XT) resolve to
+    # the actual board model instead of the generic pci.ids label that lspci
+    # would otherwise emit.
+    gpu_name=$(lookup_pci_gpu_subsystem_field "$vendor" "$device_id" "$subsystem_vendor" "$subsystem_device" 6 2>/dev/null)
+    gpu_name=$(normalize_gpu_model_name "$gpu_name")
+
+    if [ -z "$gpu_name" ] && command -v lspci > /dev/null 2>&1; then
         gpu_name=$(lspci -s "$pci_short" 2>/dev/null | sed 's/.*[Cc]ontroller[^:]*: //')
         gpu_name=$(normalize_gpu_model_name "$gpu_name")
 
@@ -542,13 +699,11 @@ get_pci_gpu_model() {
         gpu_name=$(normalize_gpu_model_name "$gpu_name")
     fi
 
-    [ -n "$gpu_name" ] || gpu_name=$(lookup_pci_gpu_subsystem_field "$vendor" "$device_id" "$subsystem_vendor" "$subsystem_device" 6 2>/dev/null)
-    gpu_name=$(normalize_gpu_model_name "$gpu_name")
-
     [ -n "$gpu_name" ] || gpu_name=$(lookup_pci_gpu_field "$vendor" "$device_id" 4 2>/dev/null)
     gpu_name=$(normalize_gpu_model_name "$gpu_name")
 
     [ -n "$gpu_name" ] || gpu_name="${vendor_name} GPU (${device_id})"
+    gpu_name=$(refine_amd_gpu_model_name "$pci_slot" "$vendor" "$device_id" "$gpu_name")
     printf '%s\n' "$gpu_name"
 }
 
