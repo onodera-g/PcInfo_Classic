@@ -1,0 +1,59 @@
+PCInfo Classic bundles and redistributes third-party software and data when
+building the bootable image. This file summarizes the main third-party
+components that are included by build/build_alpine.sh.
+
+Project license
+---------------
+The original project files in this repository are licensed under the MIT
+License. See the root LICENSE file.
+
+Bundled third-party components
+------------------------------
+1. Alpine Linux packages
+   - Source: Alpine Linux 3.21 standard image and official main/community
+     repositories.
+   - Build logic: build/build_alpine.sh downloads the Alpine standard image,
+     extracts base packages, and adds extra APK packages to the generated
+     image.
+   - License: varies by package. The generated image includes packages under
+     GPL, LGPL, MIT, BSD, Apache, ISC, and other licenses.
+   - Exact package metadata is recorded in the generated
+     BUNDLED_PACKAGES.tsv file. Alpine package recipes/source-reference URLs
+     are recorded in the generated SOURCE_LOCATIONS file.
+   - Some packages use combined or alternative SPDX license expressions, so
+     the generated files should be reviewed whenever package versions change.
+
+2. Memtest86+
+   - Source: memtest.org binary release and Debian memtest86+ package used as
+     a fallback source for the bzImage payload.
+   - Build logic: build/build_alpine.sh downloads and redistributes
+     memtest.efi and memtest.bin in the generated image.
+   - License: GPL-2.0-only according to upstream Memtest86+ documentation.
+
+3. pci.ids
+   - Source: PCI ID Project (https://pci-ids.ucw.cz/).
+   - Build logic: build/build_alpine.sh downloads pci.ids and copies it into
+     the generated image.
+   - License: pci.ids states that it may be distributed under either
+     GPL-2.0-or-later or BSD-3-Clause.
+
+Modified third-party component
+------------------------------
+kexec-tools is redistributed from the Alpine package set, and the extracted
+kexec binary is modified during the build to replace /sys/firmware/memmap with
+/sys/firmware/NOSCAN before the image is packaged. The modification logic is
+implemented in build/build_alpine.sh.
+
+For redistributors of generated images, the corresponding source for this
+modified kexec-tools component should be treated as including:
+  - the upstream kexec-tools source for the redistributed version,
+  - the Alpine packaging metadata for the redistributed package version, and
+  - the modification logic in build/build_alpine.sh used to alter the binary
+    before redistribution.
+
+Redistribution note
+-------------------
+If you redistribute generated images, you are responsible for complying with
+the licenses of the bundled third-party components, including providing any
+required notices, license texts, and corresponding source code or source
+offers where applicable. See also COMPLIANCE_README and SOURCE_OFFER.

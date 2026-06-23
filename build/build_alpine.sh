@@ -13,7 +13,8 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SRC_DIR="$SCRIPT_DIR/../src"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SRC_DIR="$REPO_DIR/src"
 WORK_DIR="$SCRIPT_DIR/work_alpine"
 OUTPUT_IMG="$SCRIPT_DIR/pcinfo-classic.img"
 GPU_PCI_IDS_BUILD_FILE="$WORK_DIR/gpu_pci_ids.txt"
@@ -241,6 +242,111 @@ download_apk() {
     [ "$deps" = "-" ] && deps=""
     [ "$provides" = "-" ] && provides=""
     download_apk_file "$repo" "$resolved_pkg" "$ver" "$dest_dir"
+}
+
+generate_bundled_packages_manifest() {
+    local out="$1"
+    local apk_dir="$WORK_DIR/apks/x86_64"
+    local f pkg ver origin lic repo
+
+    printf 'package\tversion\torigin\trepo\tlicense\n' > "$out"
+    for f in "$apk_dir"/*.apk; do
+        [ -f "$f" ] || continue
+        pkg=$(tar -xOf "$f" .PKGINFO 2>/dev/null | awk -F ' = ' '/^pkgname = /{print $2; exit}')
+        ver=$(tar -xOf "$f" .PKGINFO 2>/dev/null | awk -F ' = ' '/^pkgver = /{print $2; exit}')
+        origin=$(tar -xOf "$f" .PKGINFO 2>/dev/null | awk -F ' = ' '/^origin = /{print $2; exit}')
+        lic=$(tar -xOf "$f" .PKGINFO 2>/dev/null | awk -F ' = ' '/^license = /{print $2; exit}')
+        repo=$(awk -F '\t' -v pkg_name="$pkg" -v pkg_ver="$ver" '
+            $2 == pkg_name && $3 == pkg_ver {
+                print $1
+                exit
+            }
+        ' "$WORK_DIR/apk_catalog.tsv")
+        [ -n "$repo" ] || repo="main"
+        [ -n "$origin" ] || origin="$pkg"
+        printf '%s\t%s\t%s\t%s\t%s\n' "$pkg" "$ver" "$origin" "$repo" "$lic"
+    done | sort >> "$out"
+}
+
+generate_source_locations_file() {
+    local manifest="$1" out="$2"
+
+    printf 'package\tversion\torigin\trepo\tlicense\tpackage_page\tapkbuild_tree\n' > "$out"
+    awk -F '\t' '
+        NR == 1 { next }
+        {
+            pkg = $1
+            ver = $2
+            origin = $3
+            repo = $4
+            lic = $5
+            if (repo == "") repo = "main"
+            if (origin == "") origin = pkg
+            pkg_url = "https://pkgs.alpinelinux.org/package/v3.21/" repo "/x86_64/" pkg
+            apkbuild_url = "https://gitlab.alpinelinux.org/alpine/aports/-/tree/3.21-stable/" repo "/" origin
+            printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", pkg, ver, origin, repo, lic, pkg_url, apkbuild_url
+        }
+    ' "$manifest" >> "$out"
+}
+
+install_compliance_bundle() {
+    local dest_dir="$1"
+    local work_dir="$WORK_DIR/compliance"
+    local manifest="$work_dir/BUNDLED_PACKAGES.tsv"
+    local sources="$work_dir/SOURCE_LOCATIONS"
+    local fetched_licenses_dir="$work_dir/fetched-license-texts"
+    local static_file
+
+    mkdir -p "$work_dir" "$dest_dir" "$dest_dir/PATCHES"
+    generate_bundled_packages_manifest "$manifest"
+    generate_source_locations_file "$manifest" "$sources"
+
+    cp "$manifest" "$dest_dir/BUNDLED_PACKAGES.tsv"
+    cp "$sources" "$dest_dir/SOURCE_LOCATIONS"
+    log "  Installed: BUNDLED_PACKAGES.tsv"
+    log "  Installed: SOURCE_LOCATIONS"
+
+    mkdir -p "$fetched_licenses_dir"
+    download "https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt" \
+        "$fetched_licenses_dir/COPYING.GPL-2.0"
+    download "https://www.gnu.org/licenses/gpl-3.0.txt" \
+        "$fetched_licenses_dir/COPYING.GPL-3.0"
+    download "https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt" \
+        "$fetched_licenses_dir/COPYING.LGPL-2.1"
+    download "https://www.apache.org/licenses/LICENSE-2.0.txt" \
+        "$fetched_licenses_dir/COPYING.APACHE-2.0"
+    cp "$fetched_licenses_dir"/COPYING.GPL-2.0 "$dest_dir/COPYING.GPL-2.0"
+    cp "$fetched_licenses_dir"/COPYING.GPL-3.0 "$dest_dir/COPYING.GPL-3.0"
+    cp "$fetched_licenses_dir"/COPYING.LGPL-2.1 "$dest_dir/COPYING.LGPL-2.1"
+    cp "$fetched_licenses_dir"/COPYING.APACHE-2.0 "$dest_dir/COPYING.APACHE-2.0"
+    log "  Installed: COPYING.GPL-2.0"
+    log "  Installed: COPYING.GPL-3.0"
+    log "  Installed: COPYING.LGPL-2.1"
+    log "  Installed: COPYING.APACHE-2.0"
+
+    for static_file in \
+        LICENSE \
+        THIRD_PARTY_NOTICES \
+        SOURCE_OFFER \
+        COMPLIANCE_README \
+        COPYING.BSD-3-Clause \
+        NOTICE.APACHE-2.0
+    do
+        if [ -f "$REPO_DIR/$static_file" ]; then
+            cp "$REPO_DIR/$static_file" "$dest_dir/$static_file"
+            log "  Installed: $static_file"
+        else
+            warn "  Missing repository file: $REPO_DIR/$static_file"
+        fi
+    done
+
+    if [ -f "$REPO_DIR/PATCHES/kexec-tools-binary-adjustment.txt" ]; then
+        cp "$REPO_DIR/PATCHES/kexec-tools-binary-adjustment.txt" \
+            "$dest_dir/PATCHES/kexec-tools-binary-adjustment.txt"
+        log "  Installed: PATCHES/kexec-tools-binary-adjustment.txt"
+    else
+        warn "  Missing repository patch note: $REPO_DIR/PATCHES/kexec-tools-binary-adjustment.txt"
+    fi
 }
 
 # ---- Step 1: Download Alpine standard ISO and extract boot files ----
@@ -759,6 +865,8 @@ PYEOF
     else
         error "Missing official pci.ids: $WORK_DIR/pci.ids"
     fi
+
+    install_compliance_bundle "$ovl_dir/usr/share/licenses/pcinfo-classic"
 
     # Symlink: /opt/pcinfo/menu.sh as entrypoint
     ln -sf /opt/pcinfo/menu.sh "$ovl_dir/opt/pcinfo/start"

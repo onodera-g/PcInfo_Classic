@@ -1,0 +1,38 @@
+PCInfo Classic compliance bundle
+================================
+
+This repository ships its own code under MIT, but generated images also
+redistribute third-party software and data. The following files are intended
+to travel with generated images:
+
+  - LICENSE
+  - THIRD_PARTY_NOTICES
+  - BUNDLED_PACKAGES.tsv
+  - SOURCE_LOCATIONS
+  - SOURCE_OFFER
+  - COPYING.GPL-2.0
+  - COPYING.GPL-3.0
+  - COPYING.LGPL-2.1
+  - COPYING.APACHE-2.0
+  - COPYING.BSD-3-Clause
+  - NOTICE.APACHE-2.0
+  - PATCHES/kexec-tools-binary-adjustment.txt
+
+What this bundle does:
+
+  - identifies the project's own license,
+  - records which third-party components are bundled,
+  - records the bundled Alpine package names, versions, origins, repos, and
+    declared license expressions,
+  - records Alpine package metadata/source-reference URLs,
+  - records the local kexec-tools binary adjustment that affects source
+    correspondence.
+
+Important limitation:
+
+This bundle improves redistribution readiness, but it is not a legal opinion
+or an absolute guarantee. Some bundled packages use combined or alternative
+license expressions, and exact compliance still depends on distributing the
+matching corresponding source and any required notices for the exact binaries
+you ship. The generated package/source reference files are intended to make
+that review auditable, especially when package versions change.

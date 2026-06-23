@@ -1,0 +1,17 @@
+Apache-2.0 notice summary
+=========================
+
+Bundled Alpine packages currently identified with Apache-2.0 metadata:
+
+  - openssl
+  - libcrypto3
+  - libssl3
+
+At the time this compliance bundle was prepared, no standalone NOTICE file
+was detected inside the redistributed Alpine binary APK archives for those
+packages. This file is therefore provided as a tracking note for the Apache
+License redistribution requirement.
+
+When package versions change, re-check the corresponding source packages and
+package metadata pages listed in SOURCE_LOCATIONS to confirm whether upstream
+NOTICE content must also be reproduced.

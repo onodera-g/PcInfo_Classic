@@ -1,0 +1,5 @@
+# This repository keeps an intentionally minimal tracked copy.
+# The authoritative file for redistribution is generated during image build
+# from the bundled APK .PKGINFO metadata and copied into:
+#   /usr/share/licenses/pcinfo-classic/BUNDLED_PACKAGES.tsv
+package	version	origin	repo	license

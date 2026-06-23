@@ -1,0 +1,21 @@
+The authoritative SOURCE_LOCATIONS file is generated during image build from
+the bundled APK metadata and copied into:
+
+  /usr/share/licenses/pcinfo-classic/SOURCE_LOCATIONS
+
+Generated columns:
+  package
+  version
+  origin
+  repo
+  license
+  package_page
+  apkbuild_tree
+
+The generated file points to:
+  - the Alpine package metadata page for the exact package name, and
+  - the Alpine aports tree location for the package origin on 3.21-stable.
+
+For packages modified locally after extraction, see:
+
+  PATCHES/kexec-tools-binary-adjustment.txt

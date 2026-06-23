@@ -1,0 +1,29 @@
+kexec-tools binary adjustment
+=============================
+
+Component:
+  kexec-tools from the bundled Alpine package set
+
+Why it is adjusted:
+  The build changes the extracted kexec binary so it avoids relying on
+  /sys/firmware/memmap and instead falls back to /proc/iomem-based detection
+  for memory range discovery on affected systems.
+
+Current implementation:
+  build/build_alpine.sh extracts kexec-tools into the overlay and then runs a
+  byte replacement on the installed binary:
+
+    /sys/firmware/memmap -> /sys/firmware/NOSCAN
+
+Files involved:
+  - build/build_alpine.sh
+  - generated overlay path: /usr/sbin/kexec
+
+Corresponding-source implication:
+  When redistributing a generated image that contains this adjusted binary,
+  retain or provide access to:
+
+    1. the upstream kexec-tools source for the redistributed version,
+    2. the Alpine packaging metadata for that version, and
+    3. this adjustment description together with the build logic that applies
+       the modification.

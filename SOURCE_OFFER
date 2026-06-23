@@ -1,0 +1,32 @@
+Source offer for redistributed images
+=====================================
+
+If you redistribute a generated PCInfo Classic image containing bundled
+third-party binaries covered by copyleft licenses, accompany that image with
+one of the following:
+
+1. The complete corresponding source code for the covered components, or
+2. A written offer, valid for at least three years, to provide the complete
+   corresponding source code to any recipient for no more than the cost of
+   physically performing source distribution, or
+3. Network access to the same complete corresponding source code from the
+   same place where the object code is distributed.
+
+For Alpine packages bundled by this project, the generated
+usr/share/licenses/pcinfo-classic/SOURCE_LOCATIONS file records:
+
+  - the Alpine package metadata page URL, and
+  - the Alpine aports tree URL for the package origin on 3.21-stable.
+
+For the locally modified kexec-tools binary included in generated images, the
+corresponding source should be treated as including:
+
+  - the upstream kexec-tools source for the redistributed version,
+  - the Alpine packaging metadata for that redistributed version, and
+  - the local modification process described in
+    PATCHES/kexec-tools-binary-adjustment.txt and implemented in
+    build/build_alpine.sh.
+
+This file is a compliance aid and not legal advice. Redistributors remain
+responsible for ensuring that the offered source exactly matches the binaries
+they distribute.
