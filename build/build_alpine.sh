@@ -14,6 +14,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+LICENSES_DIR="$REPO_DIR/licenses"
 SRC_DIR="$REPO_DIR/src"
 WORK_DIR="$SCRIPT_DIR/work_alpine"
 OUTPUT_IMG="$SCRIPT_DIR/pcinfo-classic.img"
@@ -325,27 +326,33 @@ install_compliance_bundle() {
     log "  Installed: COPYING.APACHE-2.0"
 
     for static_file in \
-        LICENSE \
         THIRD_PARTY_NOTICES \
         SOURCE_OFFER \
         COMPLIANCE_README \
         COPYING.BSD-3-Clause \
         NOTICE.APACHE-2.0
     do
-        if [ -f "$REPO_DIR/$static_file" ]; then
-            cp "$REPO_DIR/$static_file" "$dest_dir/$static_file"
+        if [ -f "$LICENSES_DIR/$static_file" ]; then
+            cp "$LICENSES_DIR/$static_file" "$dest_dir/$static_file"
             log "  Installed: $static_file"
         else
-            warn "  Missing repository file: $REPO_DIR/$static_file"
+            warn "  Missing repository file: $LICENSES_DIR/$static_file"
         fi
     done
 
-    if [ -f "$REPO_DIR/PATCHES/kexec-tools-binary-adjustment.txt" ]; then
-        cp "$REPO_DIR/PATCHES/kexec-tools-binary-adjustment.txt" \
+    if [ -f "$REPO_DIR/LICENSE" ]; then
+        cp "$REPO_DIR/LICENSE" "$dest_dir/LICENSE"
+        log "  Installed: LICENSE"
+    else
+        warn "  Missing repository file: $REPO_DIR/LICENSE"
+    fi
+
+    if [ -f "$LICENSES_DIR/PATCHES/kexec-tools-binary-adjustment.txt" ]; then
+        cp "$LICENSES_DIR/PATCHES/kexec-tools-binary-adjustment.txt" \
             "$dest_dir/PATCHES/kexec-tools-binary-adjustment.txt"
         log "  Installed: PATCHES/kexec-tools-binary-adjustment.txt"
     else
-        warn "  Missing repository patch note: $REPO_DIR/PATCHES/kexec-tools-binary-adjustment.txt"
+        warn "  Missing repository patch note: $LICENSES_DIR/PATCHES/kexec-tools-binary-adjustment.txt"
     fi
 }
 
