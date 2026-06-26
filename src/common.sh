@@ -22,6 +22,7 @@ SEP='----------------------------------------'
 GPU_PCI_IDS_FILE="/opt/pcinfo/gpu_pci_ids.txt"
 GPU_PCI_SUBSYSTEM_IDS_FILE="/opt/pcinfo/gpu_pci_subsystem_ids.txt"
 PCI_IDS_FILE="/opt/pcinfo/pci.ids"
+GPU_DISAMBIGUATION_RULES_FILE="/opt/pcinfo/gpu_disambiguation_rules.txt"
 
 # Read a single key from TTY (raw mode)
 read_key() {
@@ -480,6 +481,16 @@ normalize_gpu_model_name() {
     [ -n "$model" ] && printf '%s\n' "$model"
 }
 
+is_ambiguous_gpu_model_name() {
+    local model="$1"
+    case "$model" in
+        *'/'*|*Series*|*series*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
 strip_pci_hex_prefix() {
     printf '%s\n' "${1#0x}"
 }
@@ -584,6 +595,8 @@ get_amd_gpu_model_from_cu_vram() {
     esac
 
     case "$cu_count:$vram_mb" in
+        64:*) printf '%s\n' 'Radeon RX Vega 64' ;;
+        56:*) printf '%s\n' 'Radeon RX Vega 56' ;;
         40:8[0-9][0-9][0-9]|40:9[0-9][0-9][0-9]) printf '%s\n' 'Radeon RX 5700 XT' ;;
         36:8[0-9][0-9][0-9]|36:9[0-9][0-9][0-9]) printf '%s\n' 'Radeon RX 5700' ;;
         36:5[0-9][0-9][0-9]|36:6[0-9][0-9][0-9]) printf '%s\n' 'Radeon RX 5600 XT' ;;
@@ -592,29 +605,18 @@ get_amd_gpu_model_from_cu_vram() {
     esac
 }
 
-refine_amd_gpu_model_name() {
+get_amd_gpu_model_from_runtime() {
     local pci_slot="$1"
     local vendor="$2"
     local device_id="$3"
-    local gpu_name="$4"
     local dev_path=""
     local driver=""
     local vram_text=""
     local refined=""
 
     [ "$vendor" = "0x1002" ] || {
-        printf '%s\n' "$gpu_name"
-        return 0
+        return 1
     }
-
-    case "$device_id:$gpu_name" in
-        0x731f:*RX\ 5600\ OEM/5600\ XT\ /\ 5700/5700\ XT*)
-            ;;
-        *)
-            printf '%s\n' "$gpu_name"
-            return 0
-            ;;
-    esac
 
     dev_path="/sys/bus/pci/devices/$pci_slot"
     if [ -L "$dev_path/driver" ]; then
@@ -624,9 +626,49 @@ refine_amd_gpu_model_name() {
     fi
     vram_text=$(get_pci_gpu_vram "$dev_path" "$pci_slot" "$vendor" "$device_id" "$driver" "" "")
     refined=$(get_amd_gpu_model_from_cu_vram "$pci_slot" "$vram_text" 2>/dev/null) || refined=""
-    [ -n "$refined" ] && gpu_name="$refined"
+    [ -n "$refined" ] || return 1
+    printf '%s\n' "$refined"
+}
 
-    printf '%s\n' "$gpu_name"
+resolve_gpu_model_by_rules() {
+    local pci_slot="$1"
+    local vendor="$2"
+    local device_id="$3"
+    local gpu_name="$4"
+    local rule_vendor=""
+    local rule_device=""
+    local name_regex=""
+    local rule_type=""
+    local resolved_name=""
+    local refined=""
+
+    [ -f "$GPU_DISAMBIGUATION_RULES_FILE" ] || return 1
+
+    while IFS='|' read -r rule_vendor rule_device name_regex rule_type resolved_name; do
+        case "$rule_vendor" in
+            ''|'#'*) continue ;;
+        esac
+        [ "$rule_vendor" = "$vendor" ] || continue
+        [ "$rule_device" = "$device_id" ] || continue
+        [ -n "$name_regex" ] || continue
+        printf '%s\n' "$gpu_name" | grep -Eiq -- "$name_regex" || continue
+
+        case "$rule_type" in
+            literal)
+                [ -n "$resolved_name" ] || continue
+                printf '%s\n' "$resolved_name"
+                return 0
+                ;;
+            amd_cu_vram)
+                refined=$(get_amd_gpu_model_from_runtime "$pci_slot" "$vendor" "$device_id" 2>/dev/null) || refined=""
+                [ -n "$refined" ] || continue
+                printf '%s\n' "$refined"
+                return 0
+                ;;
+        esac
+    done < "$GPU_DISAMBIGUATION_RULES_FILE"
+
+    return 1
 }
 
 join_display_fields() {
@@ -681,11 +723,12 @@ get_pci_gpu_model() {
     local subsystem_device="$6"
     local pci_short=""
     local gpu_name=""
+    local refined_name=""
 
     pci_short=$(printf '%s\n' "$pci_slot" | sed 's/^0000://')
 
     # Prefer subsystem (SVID:SSID) lookup first so ambiguous shared device IDs
-    # (e.g. Navi 10 0x731f used for RX 5600/5600 XT/5700/5700 XT) resolve to
+    # can be refined by the external disambiguation rules when needed.
     # the actual board model instead of the generic pci.ids label that lspci
     # would otherwise emit.
     gpu_name=$(lookup_pci_gpu_subsystem_field "$vendor" "$device_id" "$subsystem_vendor" "$subsystem_device" 6 2>/dev/null)
@@ -703,7 +746,10 @@ get_pci_gpu_model() {
     gpu_name=$(normalize_gpu_model_name "$gpu_name")
 
     [ -n "$gpu_name" ] || gpu_name="${vendor_name} GPU (${device_id})"
-    gpu_name=$(refine_amd_gpu_model_name "$pci_slot" "$vendor" "$device_id" "$gpu_name")
+    if is_ambiguous_gpu_model_name "$gpu_name"; then
+        refined_name=$(resolve_gpu_model_by_rules "$pci_slot" "$vendor" "$device_id" "$gpu_name" 2>/dev/null) || refined_name=""
+        [ -n "$refined_name" ] && gpu_name="$refined_name"
+    fi
     printf '%s\n' "$gpu_name"
 }
 
