@@ -257,6 +257,31 @@ get_gpu_max_sclk() {
     printf '%s\n' "$line" | sed -n 's/.*[: ]\([0-9]\{1,\}[Mm][Hh][Zz]\).*/\1/p'
 }
 
+get_gpu_max_mclk() {
+    local dev="$1"
+    local line=""
+    [ -r "$dev/pp_dpm_mclk" ] || return 0
+    line=$(awk '$0 ~ /[0-9]+[Mm][Hh][Zz]/ { last=$0 } END { print last }' "$dev/pp_dpm_mclk" 2>/dev/null)
+    [ -n "$line" ] || return 0
+    printf '%s\n' "$line" | sed -n 's/.*[: ]\([0-9]\{1,\}[Mm][Hh][Zz]\).*/\1/p'
+}
+
+get_gpu_cu_count() {
+    local vendor="$1"
+    local pci_slot="$2"
+    [ "$vendor" = "0x1002" ] || return 0
+    get_amd_active_cu_count "$pci_slot" 2>/dev/null
+}
+
+get_gpu_sp_estimate_from_cu() {
+    local cu_count="$1"
+    case "$cu_count" in
+        ''|*[!0-9]*) return 0 ;;
+    esac
+    # AMD (GCN/RDNA) は 1CU = 64 SP のため概算値として表示する。
+    printf '%s\n' $((cu_count * 64))
+}
+
 show_gpus() {
     section "Detected GPUs"
 
@@ -264,7 +289,8 @@ show_gpus() {
     local dev vendor device_id subsystem_vendor subsystem_device
     local pci_slot pci_short vendor_name gpu_model gpu_vram gpu_slot_label
     local driver expected driver_text
-    local pci_id_text subsys_id_text subsys_label max_sclk
+    local pci_id_text subsys_id_text subsys_label max_sclk max_mclk
+    local cu_count sp_estimate pcie_link_width clock_text
 
     for dev in $(detect_gpu_devices); do
         gpu_count=$((gpu_count + 1))
@@ -291,11 +317,24 @@ show_gpus() {
         fi
         subsys_label=$(get_pci_subsystem_label "$pci_short")
         max_sclk=$(get_gpu_max_sclk "$dev")
+            max_mclk=$(get_gpu_max_mclk "$dev")
+            cu_count=$(get_gpu_cu_count "$vendor" "$pci_slot")
+            sp_estimate=$(get_gpu_sp_estimate_from_cu "$cu_count")
+            pcie_link_width=$(get_pci_link_width "$dev" "$pci_slot")
+            clock_text=""
+            [ -n "$max_sclk" ] && clock_text="SCLK ${max_sclk}"
+            if [ -n "$max_mclk" ]; then
+                if [ -n "$clock_text" ]; then
+                    clock_text="${clock_text} / MCLK ${max_mclk}"
+                else
+                    clock_text="MCLK ${max_mclk}"
+                fi
+            fi
 
-        if [ -n "$driver" ]; then
-            driver_text="${GREEN}${driver}${RESET}"
-        else
-            driver_text="${RED}not bound (expected: ${expected})${RESET}"
+            if [ -n "$driver" ]; then
+                driver_text="${GREEN}${driver}${RESET}"
+            else
+                driver_text="${RED}not bound (expected: ${expected})${RESET}"
         fi
 
         group_title "GPU $gpu_count"
@@ -305,7 +344,10 @@ show_gpus() {
         [ -n "$subsys_id_text" ] && item "Subsys ID"  "$subsys_id_text"
         [ -n "$subsys_label" ]   && item "Subsys"     "$subsys_label"
         item "VRAM"     "$gpu_vram"
-        [ -n "$max_sclk" ]       && item "Max SCLK"   "$max_sclk"
+        [ -n "$cu_count" ]       && item "CU"         "$cu_count"
+        [ -n "$sp_estimate" ]    && item "SP (est.)"  "$sp_estimate"
+        [ -n "$clock_text" ]     && item "Clock"      "$clock_text"
+        item "PCIe Bus" "$pcie_link_width"
         item "Driver"   "$driver_text"
         printf "\n"
     done
