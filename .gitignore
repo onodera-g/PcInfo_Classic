@@ -12,6 +12,8 @@ build/pcinfo-classic.img
 wget-log*
 test.txt
 *.log
+メモ.txt
+gpu_ambiguous_target_entries.txt
 
 # Screenshots
 *.png
