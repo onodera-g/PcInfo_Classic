@@ -1,5 +1,14 @@
 # device_id|name_regex|resolved_name
 
+0x249c|3080 Mobile / Max-Q|GeForce RTX 3080 Laptop GPU
+0x249d|3070 Mobile / Max-Q|GeForce RTX 3070 Laptop GPU
+0x24dc|3080 Mobile / Max-Q|GeForce RTX 3080 Laptop GPU
+0x24dd|3070 Mobile / Max-Q|GeForce RTX 3070 Laptop GPU
+0x2520|3060 Mobile / Max-Q|GeForce RTX 3060 Laptop GPU
+0x2523|3050 Ti Mobile / Max-Q|GeForce RTX 3050 Ti Laptop GPU
+0x2560|3060 Mobile / Max-Q|GeForce RTX 3060 Laptop GPU
+0x2563|3050 Ti Mobile / Max-Q|GeForce RTX 3050 Ti Laptop GPU
+
 0x27a0|4080 Max-Q / Mobile|GeForce RTX 4080 Laptop GPU
 0x27e0|4080 Max-Q / Mobile|GeForce RTX 4080 Laptop GPU
 0x2820|4070 Max-Q / Mobile|GeForce RTX 4070 Laptop GPU
