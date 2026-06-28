@@ -842,7 +842,7 @@ PYEOF
 
     # Install PCInfo scripts
     local scripts="common.sh menu.sh menu_pcinfo.sh menu_storage.sh menu_gpu.sh menu_memtest.sh pcinfo.sh"
-    local data_files="gpu_disambiguation_rules.txt"
+    local data_files="gpu_disambiguation_rules.txt gpu_amd_cu_vram_rules.txt gpu_nvidia_literal_rules.txt"
     for s in $scripts; do
         if [ -f "$SRC_DIR/$s" ]; then
             cp "$SRC_DIR/$s" "$ovl_dir/opt/pcinfo/$s"

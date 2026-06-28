@@ -23,6 +23,8 @@ GPU_PCI_IDS_FILE="/opt/pcinfo/gpu_pci_ids.txt"
 GPU_PCI_SUBSYSTEM_IDS_FILE="/opt/pcinfo/gpu_pci_subsystem_ids.txt"
 PCI_IDS_FILE="/opt/pcinfo/pci.ids"
 GPU_DISAMBIGUATION_RULES_FILE="/opt/pcinfo/gpu_disambiguation_rules.txt"
+GPU_AMD_CU_VRAM_RULES_FILE="/opt/pcinfo/gpu_amd_cu_vram_rules.txt"
+GPU_NVIDIA_LITERAL_RULES_FILE="/opt/pcinfo/gpu_nvidia_literal_rules.txt"
 
 # Read a single key from TTY (raw mode)
 read_key() {
@@ -577,9 +579,83 @@ get_amd_active_cu_count() {
     printf '%s\n' "$cu_count"
 }
 
+lookup_amd_gpu_model_from_cu_vram_rules() {
+    local device_id="$1"
+    local cu_count="$2"
+    local vram_mb="$3"
+    local rule_device=""
+    local rule_cu_pattern=""
+    local rule_vram_pattern=""
+    local rule_name=""
+
+    [ -f "$GPU_AMD_CU_VRAM_RULES_FILE" ] || return 1
+
+    while IFS='|' read -r rule_device rule_cu_pattern rule_vram_pattern rule_name; do
+        case "$rule_device" in
+            ''|'#'*) continue ;;
+        esac
+        [ "$rule_device" = "$device_id" ] || continue
+        [ -n "$rule_cu_pattern" ] || continue
+        [ -n "$rule_vram_pattern" ] || continue
+        [ -n "$rule_name" ] || continue
+
+        case "$cu_count" in
+            $rule_cu_pattern) ;;
+            *) continue ;;
+        esac
+        case "$vram_mb" in
+            $rule_vram_pattern) ;;
+            *) continue ;;
+        esac
+
+        printf '%s\n' "$rule_name"
+        return 0
+    done < "$GPU_AMD_CU_VRAM_RULES_FILE"
+
+    return 1
+}
+
+lookup_nvidia_literal_model_from_rules() {
+    local device_id="$1"
+    local gpu_name="$2"
+    local rule_device=""
+    local rule_name_regex=""
+    local rule_name=""
+
+    [ -f "$GPU_NVIDIA_LITERAL_RULES_FILE" ] || return 1
+
+    while IFS='|' read -r rule_device rule_name_regex rule_name; do
+        case "$rule_device" in
+            ''|'#'*) continue ;;
+        esac
+        [ "$rule_device" = "$device_id" ] || continue
+        [ -n "$rule_name_regex" ] || continue
+        [ -n "$rule_name" ] || continue
+        printf '%s\n' "$gpu_name" | grep -Eiq -- "$rule_name_regex" || continue
+
+        printf '%s\n' "$rule_name"
+        return 0
+    done < "$GPU_NVIDIA_LITERAL_RULES_FILE"
+
+    return 1
+}
+
+rule_field_matches() {
+    local rule_value="$1"
+    local actual_value="$2"
+
+    case "$rule_value" in
+        '*') return 0 ;;
+        '') return 1 ;;
+    esac
+
+    [ "$rule_value" = "$actual_value" ]
+}
+
 get_amd_gpu_model_from_cu_vram() {
-    local pci_slot="$1"
-    local vram_text="$2"
+    local device_id="$1"
+    local pci_slot="$2"
+    local vram_text="$3"
     local cu_count=""
     local vram_mb=""
 
@@ -594,15 +670,11 @@ get_amd_gpu_model_from_cu_vram() {
             ;;
     esac
 
-    case "$cu_count:$vram_mb" in
-        64:*) printf '%s\n' 'Radeon RX Vega 64' ;;
-        56:*) printf '%s\n' 'Radeon RX Vega 56' ;;
-        40:8[0-9][0-9][0-9]|40:9[0-9][0-9][0-9]) printf '%s\n' 'Radeon RX 5700 XT' ;;
-        36:8[0-9][0-9][0-9]|36:9[0-9][0-9][0-9]) printf '%s\n' 'Radeon RX 5700' ;;
-        36:5[0-9][0-9][0-9]|36:6[0-9][0-9][0-9]) printf '%s\n' 'Radeon RX 5600 XT' ;;
-        32:5[0-9][0-9][0-9]|32:6[0-9][0-9][0-9]) printf '%s\n' 'Radeon RX 5600' ;;
-        *) return 1 ;;
+    case "$vram_mb" in
+        ''|*[!0-9]*) return 1 ;;
     esac
+
+    lookup_amd_gpu_model_from_cu_vram_rules "$device_id" "$cu_count" "$vram_mb"
 }
 
 get_amd_gpu_model_from_runtime() {
@@ -625,7 +697,7 @@ get_amd_gpu_model_from_runtime() {
         driver="none"
     fi
     vram_text=$(get_pci_gpu_vram "$dev_path" "$pci_slot" "$vendor" "$device_id" "$driver" "" "")
-    refined=$(get_amd_gpu_model_from_cu_vram "$pci_slot" "$vram_text" 2>/dev/null) || refined=""
+    refined=$(get_amd_gpu_model_from_cu_vram "$device_id" "$pci_slot" "$vram_text" 2>/dev/null) || refined=""
     [ -n "$refined" ] || return 1
     printf '%s\n' "$refined"
 }
@@ -648,8 +720,8 @@ resolve_gpu_model_by_rules() {
         case "$rule_vendor" in
             ''|'#'*) continue ;;
         esac
-        [ "$rule_vendor" = "$vendor" ] || continue
-        [ "$rule_device" = "$device_id" ] || continue
+        rule_field_matches "$rule_vendor" "$vendor" || continue
+        rule_field_matches "$rule_device" "$device_id" || continue
         [ -n "$name_regex" ] || continue
         printf '%s\n' "$gpu_name" | grep -Eiq -- "$name_regex" || continue
 
@@ -661,6 +733,12 @@ resolve_gpu_model_by_rules() {
                 ;;
             amd_cu_vram)
                 refined=$(get_amd_gpu_model_from_runtime "$pci_slot" "$vendor" "$device_id" 2>/dev/null) || refined=""
+                [ -n "$refined" ] || continue
+                printf '%s\n' "$refined"
+                return 0
+                ;;
+            nvidia_literal_map)
+                refined=$(lookup_nvidia_literal_model_from_rules "$device_id" "$gpu_name" 2>/dev/null) || refined=""
                 [ -n "$refined" ] || continue
                 printf '%s\n' "$refined"
                 return 0
