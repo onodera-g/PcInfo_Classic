@@ -2,10 +2,12 @@
 # rule_type:
 #   literal     -> resolved_name をそのまま返す
 #   amd_cu_vram -> CU/VRAM から AMD モデルを補正する（resolved_name は未使用）
+#   nvidia_vram -> VRAM から NVIDIA モデルを補正する（resolved_name は未使用）
 #   nvidia_literal_map -> NVIDIA の曖昧名を外部マップで補正する（resolved_name は未使用）
 
 0x1002|0x687f|Vega 56/64|amd_cu_vram|
 0x1002|0x687f|Vega 10 XL/XT|amd_cu_vram|
 0x1002|0x731f|RX 5600 OEM/5600 XT / 5700/5700 XT|amd_cu_vram|
+0x10de|0x2bb3|RTX PRO 5000 Blackwell / RTX PRO 5000 72GB Blackwell|nvidia_vram|
 
 0x10de|*|.*|nvidia_literal_map|

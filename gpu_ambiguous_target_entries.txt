@@ -2,7 +2,7 @@
 Generated: 2026-06-28 07:29:20 +09:00
 Source base file: gpu_ambiguous_all_entries.txt
 Filter scope: NVIDIA GTX 2xx series+ / AMD HD 3000 series+
-Total entries: 180
+Total entries: 173
 
 1002:1309|Kaveri [Radeon R6/R7 Graphics]
 1002:15d8|Picasso/Raven 2 [Radeon Vega Series / Radeon Vega Mobile Series]
@@ -171,16 +171,9 @@ Total entries: 180
 10de:0190|G80 [GeForce 8800 GTS / 8800 GTX]
 10de:0612|G92 [GeForce 9800 GTX / 9800 GTX+]
 10de:13d8|GM204M [GeForce GTX 960 OEM / 970M]
-10de:1e30|TU102GL [Quadro RTX 6000/8000]
-10de:1e37|TU102GL [Tesla T10 16GB / GRID RTX T10-2/T10-4/T10-8]
-10de:1e78|TU102GL [Quadro RTX 6000/8000]
-10de:1eb5|TU104GLM [Quadro RTX 5000 Mobile / Max-Q]
-10de:1eb6|TU104GLM [Quadro RTX 4000 Mobile / Max-Q]
-10de:1f36|TU106GLM [Quadro RTX 3000 Mobile / Max-Q]
 10de:1f96|TU117M [GeForce GTX 1650 Mobile / Max-Q]
 10de:1f99|TU117M [GeForce GTX 1650 Mobile / Max-Q]
 10de:1f9d|TU117M [GeForce GTX 1650 Mobile / Max-Q]
 10de:222f|GA102 [GeForce RTX 3080 11GB / 12GB Engineering Sample]
 10de:25ac|GA107BM / GN20-P0-R-K2 [GeForce RTX 3050 6GB Laptop GPU]
 10de:25ec|GA107BM / GN20-P0-R-K2 [GeForce RTX 3050 6GB Laptop GPU]
-10de:2bb3|GB202GL [RTX PRO 5000 Blackwell / RTX PRO 5000 72GB Blackwell]

@@ -25,6 +25,7 @@ PCI_IDS_FILE="/opt/pcinfo/pci.ids"
 GPU_DISAMBIGUATION_RULES_FILE="/opt/pcinfo/gpu_disambiguation_rules.txt"
 GPU_AMD_CU_VRAM_RULES_FILE="/opt/pcinfo/gpu_amd_cu_vram_rules.txt"
 GPU_NVIDIA_LITERAL_RULES_FILE="/opt/pcinfo/gpu_nvidia_literal_rules.txt"
+GPU_NVIDIA_VRAM_RULES_FILE="/opt/pcinfo/gpu_nvidia_vram_rules.txt"
 
 # Read a single key from TTY (raw mode)
 read_key() {
@@ -652,14 +653,10 @@ rule_field_matches() {
     [ "$rule_value" = "$actual_value" ]
 }
 
-get_amd_gpu_model_from_cu_vram() {
-    local device_id="$1"
-    local pci_slot="$2"
-    local vram_text="$3"
-    local cu_count=""
+parse_gpu_vram_text_to_mb() {
+    local vram_text="$1"
     local vram_mb=""
 
-    cu_count=$(get_amd_active_cu_count "$pci_slot" 2>/dev/null) || return 1
     vram_mb=$(printf '%s\n' "$vram_text" | sed -n \
         -e 's/^\([0-9][0-9]*\)[[:space:]]*GB$/\1/p' \
         -e 's/^\([0-9][0-9]*\)[[:space:]]*MB$/\1/p')
@@ -673,6 +670,19 @@ get_amd_gpu_model_from_cu_vram() {
     case "$vram_mb" in
         ''|*[!0-9]*) return 1 ;;
     esac
+
+    printf '%s\n' "$vram_mb"
+}
+
+get_amd_gpu_model_from_cu_vram() {
+    local device_id="$1"
+    local pci_slot="$2"
+    local vram_text="$3"
+    local cu_count=""
+    local vram_mb=""
+
+    cu_count=$(get_amd_active_cu_count "$pci_slot" 2>/dev/null) || return 1
+    vram_mb=$(parse_gpu_vram_text_to_mb "$vram_text" 2>/dev/null) || return 1
 
     lookup_amd_gpu_model_from_cu_vram_rules "$device_id" "$cu_count" "$vram_mb"
 }
@@ -698,6 +708,61 @@ get_amd_gpu_model_from_runtime() {
     fi
     vram_text=$(get_pci_gpu_vram "$dev_path" "$pci_slot" "$vendor" "$device_id" "$driver" "" "")
     refined=$(get_amd_gpu_model_from_cu_vram "$device_id" "$pci_slot" "$vram_text" 2>/dev/null) || refined=""
+    [ -n "$refined" ] || return 1
+    printf '%s\n' "$refined"
+}
+
+lookup_nvidia_gpu_model_from_vram_rules() {
+    local device_id="$1"
+    local vram_mb="$2"
+    local rule_device=""
+    local rule_vram_pattern=""
+    local rule_name=""
+
+    [ -f "$GPU_NVIDIA_VRAM_RULES_FILE" ] || return 1
+
+    while IFS='|' read -r rule_device rule_vram_pattern rule_name; do
+        case "$rule_device" in
+            ''|'#'*) continue ;;
+        esac
+        [ "$rule_device" = "$device_id" ] || continue
+        [ -n "$rule_vram_pattern" ] || continue
+        [ -n "$rule_name" ] || continue
+
+        case "$vram_mb" in
+            $rule_vram_pattern) ;;
+            *) continue ;;
+        esac
+
+        printf '%s\n' "$rule_name"
+        return 0
+    done < "$GPU_NVIDIA_VRAM_RULES_FILE"
+
+    return 1
+}
+
+get_nvidia_gpu_model_from_runtime() {
+    local pci_slot="$1"
+    local vendor="$2"
+    local device_id="$3"
+    local dev_path=""
+    local driver=""
+    local vram_text=""
+    local vram_mb=""
+    local refined=""
+
+    [ "$vendor" = "0x10de" ] || return 1
+
+    dev_path="/sys/bus/pci/devices/$pci_slot"
+    if [ -L "$dev_path/driver" ]; then
+        driver=$(basename "$(readlink "$dev_path/driver" 2>/dev/null)")
+    else
+        driver="none"
+    fi
+
+    vram_text=$(get_pci_gpu_vram "$dev_path" "$pci_slot" "$vendor" "$device_id" "$driver" "" "")
+    vram_mb=$(parse_gpu_vram_text_to_mb "$vram_text" 2>/dev/null) || return 1
+    refined=$(lookup_nvidia_gpu_model_from_vram_rules "$device_id" "$vram_mb" 2>/dev/null) || refined=""
     [ -n "$refined" ] || return 1
     printf '%s\n' "$refined"
 }
@@ -733,6 +798,12 @@ resolve_gpu_model_by_rules() {
                 ;;
             amd_cu_vram)
                 refined=$(get_amd_gpu_model_from_runtime "$pci_slot" "$vendor" "$device_id" 2>/dev/null) || refined=""
+                [ -n "$refined" ] || continue
+                printf '%s\n' "$refined"
+                return 0
+                ;;
+            nvidia_vram)
+                refined=$(get_nvidia_gpu_model_from_runtime "$pci_slot" "$vendor" "$device_id" 2>/dev/null) || refined=""
                 [ -n "$refined" ] || continue
                 printf '%s\n' "$refined"
                 return 0

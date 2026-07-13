@@ -1,0 +1,5 @@
+# device_id|vram_mb_pattern|resolved_name
+# vram_mb_pattern は shell case パターン
+
+0x2bb3|7*|NVIDIA RTX PRO 5000 72GB Blackwell
+0x2bb3|*|NVIDIA RTX PRO 5000 Blackwell
