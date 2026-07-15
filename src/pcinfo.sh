@@ -29,10 +29,6 @@ section() {
 
 na() { echo "N/A"; }
 
-trim_value() {
-    printf '%s\n' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
-}
-
 format_decimal_bytes() {
     local bytes="$1"
 
@@ -147,7 +143,23 @@ normalize_memory_locator() {
     if [ -n "$parsed" ]; then
         channel=${parsed%|*}
         slot_index=${parsed#*|}
-        printf '%s-DIMM %s\n' "$channel" "$slot_index"
+        printf '%s-DIMM %s\n' "$channel" "$((slot_index + 1))"
+        return 0
+    fi
+
+    parsed=$(printf '%s\n' "$value" | sed -n 's/^DIMM[ _]*\([A-Za-z]\)[ _]*\([0-9][0-9]*\)$/\1|\2/p')
+    if [ -n "$parsed" ]; then
+        channel=${parsed%|*}
+        slot_index=${parsed#*|}
+        printf '%s-DIMM %s\n' "$channel" "$((slot_index + 1))"
+        return 0
+    fi
+
+    parsed=$(printf '%s\n' "$value" | sed -n 's/^Channel[[:space:]]*\([A-Za-z]\)[[:space:]]*DIMM[[:space:]]*\([0-9][0-9]*\)$/\1|\2/p')
+    if [ -n "$parsed" ]; then
+        channel=${parsed%|*}
+        slot_index=${parsed#*|}
+        printf '%s-DIMM %s\n' "$channel" "$((slot_index + 1))"
         return 0
     fi
 
@@ -658,6 +670,67 @@ storage_transport_name() {
     esac
 }
 
+lsblk_pair_value() {
+    local line="$1"
+    local key="$2"
+
+    printf '%s\n' "$line" | awk -v key="$key" '
+        {
+            pattern = key "=\""
+            pos = index($0, pattern)
+            if (pos == 0) {
+                exit
+            }
+            start = pos + length(pattern)
+            rest = substr($0, start)
+            end = index(rest, "\"")
+            if (end == 0) {
+                print rest
+            } else {
+                print substr(rest, 1, end - 1)
+            }
+        }
+    '
+}
+
+list_storage_block_devices() {
+    local sys_dev=""
+    local dev_name=""
+    local dev_path=""
+
+    for sys_dev in /sys/class/block/*; do
+        [ -e "$sys_dev" ] || continue
+        dev_name=$(basename "$sys_dev")
+        printf '%s\n' "$dev_name" | grep -Eq '^(sd[a-z]+|nvme[0-9]+n[0-9]+|mmcblk[0-9]+|vd[a-z]+|xvd[a-z]+)$' || continue
+        [ -f "$sys_dev/partition" ] && continue
+        dev_path="/dev/$dev_name"
+        [ -b "$dev_path" ] || continue
+        printf '%s\n' "$dev_path"
+    done
+}
+
+render_storage_entry() {
+    local storage_index="$1"
+    local storage_total="$2"
+    local dev_name="$3"
+    local model="$4"
+    local capacity="$5"
+    local iface="$6"
+
+    if [ "$storage_total" -gt 1 ]; then
+        indented_group_title "Storage $storage_index"
+        subitem "Device" "$dev_name"
+        [ "$model" != "$dev_name" ] && subitem "Model" "$model"
+        subitem "Capacity" "$capacity"
+        [ -n "$iface" ] && [ "$iface" != "Unknown" ] && subitem "Interface" "$iface"
+    else
+        item "Device" "$dev_name"
+        [ "$model" != "$dev_name" ] && item "Model" "$model"
+        item "Capacity" "$capacity"
+        [ -n "$iface" ] && [ "$iface" != "Unknown" ] && item "Interface" "$iface"
+    fi
+}
+
 # ============================================================
 # CPU
 # ============================================================
@@ -707,8 +780,6 @@ if [ -n "$memory_modules" ]; then
     done
 else
     item "Memory" "No populated slot data"
-    item "  DMI Source" "$(get_dmidecode_source_status)"
-    item "  dmidecode" "$(get_dmidecode_command_status)"
 fi
 
 # ============================================================
@@ -778,61 +849,101 @@ section "Storage"
 
 if command -v lsblk > /dev/null 2>&1; then
     storage_index=0
-    storage_lines=$(lsblk -d -b -P -o NAME,MODEL,SIZE,TRAN 2>/dev/null)
-    storage_total=$(printf '%s\n' "$storage_lines" | awk 'NF { count++ } END { print count + 0 }')
+    storage_lines=""
+    storage_lines=$(lsblk -d -b -J -o NAME,MODEL,SIZE,TRAN,TYPE 2>/dev/null | awk '
+        BEGIN { RS = "}" }
+        function trim(s) {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+            return s
+        }
+        function json_val(src, key,    token, pos, rest, ch, out, i) {
+            token = "\"" key "\""
+            pos = index(src, token)
+            if (!pos) return ""
+            rest = substr(src, pos + length(token))
+            pos = index(rest, ":")
+            if (!pos) return ""
+            rest = trim(substr(rest, pos + 1))
+            ch = substr(rest, 1, 1)
+            if (ch == "\"") {
+                rest = substr(rest, 2)
+                pos = index(rest, "\"")
+                if (!pos) return ""
+                return substr(rest, 1, pos - 1)
+            }
+            out = ""
+            for (i = 1; i <= length(rest); i++) {
+                ch = substr(rest, i, 1)
+                if (ch ~ /[0-9]/) {
+                    out = out ch
+                } else if (length(out) > 0) {
+                    break
+                }
+            }
+            return out
+        }
+        /"name"[[:space:]]*:/ {
+            name = json_val($0, "name")
+            model = json_val($0, "model")
+            size = json_val($0, "size")
+            tran = json_val($0, "tran")
+            type = json_val($0, "type")
+            if (name != "" && type != "") {
+                printf "NAME=\"%s\" MODEL=\"%s\" SIZE=\"%s\" TRAN=\"%s\" TYPE=\"%s\"\n", name, model, size, tran, type
+            }
+        }
+    ')
+    [ -n "$storage_lines" ] || storage_lines=$(lsblk -d -b -P -o NAME,MODEL,SIZE,TRAN,TYPE 2>/dev/null)
+    storage_total=$(printf '%s\n' "$storage_lines" | awk '
+        match($0, /TYPE="[^"]*"/) {
+            type = substr($0, RSTART + 6, RLENGTH - 7)
+            if (type == "disk") {
+                count++
+            }
+        }
+        END { print count + 0 }
+    ')
     printf '%s\n' "$storage_lines" | while IFS= read -r line; do
-        name=$(printf '%s\n' "$line" | sed -n 's/.*NAME="\([^"]*\)".*/\1/p')
-        model=$(printf '%s\n' "$line" | sed -n 's/.*MODEL="\([^"]*\)".*/\1/p')
-        size=$(printf '%s\n' "$line" | sed -n 's/.*SIZE="\([^"]*\)".*/\1/p')
-        tran=$(printf '%s\n' "$line" | sed -n 's/.*TRAN="\([^"]*\)".*/\1/p')
+        name=$(lsblk_pair_value "$line" "NAME")
+        model=$(lsblk_pair_value "$line" "MODEL")
+        size=$(lsblk_pair_value "$line" "SIZE")
+        tran=$(lsblk_pair_value "$line" "TRAN")
+        dtype=$(lsblk_pair_value "$line" "TYPE")
+        [ "$dtype" = "disk" ] || continue
         [ -n "$name" ] || continue
         storage_index=$((storage_index + 1))
         model=$(trim_value "$model")
         tran=$(trim_value "$tran")
         [ -n "$model" ] || model="$name"
-        [ "$storage_index" -gt 0 ] && printf '\n'
-        if [ "$storage_total" -gt 1 ]; then
-            indented_group_title "Storage $storage_index"
-            subitem "Device" "$name"
-            subitem "Model" "$model"
-            subitem "Capacity" "$(format_decimal_bytes "$size")"
-            subitem "Interface" "$(storage_transport_name "$tran")"
-        else
-            item "Device" "$name"
-            item "Model" "$model"
-            item "Capacity" "$(format_decimal_bytes "$size")"
-            item "Interface" "$(storage_transport_name "$tran")"
-        fi
+        iface=$(storage_transport_name "$tran")
+        capacity_text=$(format_decimal_bytes "$size")
+        [ -n "$capacity_text" ] || capacity_text="Unknown"
+        [ "$storage_index" -gt 1 ] && printf '\n'
+        render_storage_entry "$storage_index" "$storage_total" "$name" "$model" "$capacity_text" "$iface"
     done
+    [ "$storage_total" -eq 0 ] && item "Storage" "Not detected"
 else
     storage_index=0
     storage_total=0
-    for d in /dev/sd? /dev/nvme?n?; do
+    for d in $(list_storage_block_devices); do
         [ -b "$d" ] || continue
         storage_total=$((storage_total + 1))
     done
-    for d in /dev/sd? /dev/nvme?n?; do
+    for d in $(list_storage_block_devices); do
         [ -b "$d" ] || continue
         dev_name=$(basename "$d")
         size=$(get_block_device_size "$dev_name")
         model=$(get_block_device_model "$dev_name")
+        [ -n "$model" ] || model="$dev_name"
         iface=$(get_block_device_interface "$dev_name")
         capacity="Unknown"
-        [ -n "$size" ] && capacity=$(format_decimal_bytes "$size")
+        if [ -n "$size" ]; then
+            capacity_text=$(format_decimal_bytes "$size")
+            [ -n "$capacity_text" ] && capacity="$capacity_text"
+        fi
         storage_index=$((storage_index + 1))
         [ "$storage_index" -gt 1 ] && printf '\n'
-        if [ "$storage_total" -gt 1 ]; then
-            indented_group_title "Storage $storage_index"
-            subitem "Device" "$dev_name"
-            subitem "Model" "${model:-$dev_name}"
-            subitem "Capacity" "$capacity"
-            subitem "Interface" "$iface"
-        else
-            item "Device" "$dev_name"
-            item "Model" "${model:-$dev_name}"
-            item "Capacity" "$capacity"
-            item "Interface" "$iface"
-        fi
+        render_storage_entry "$storage_index" "$storage_total" "$dev_name" "$model" "$capacity" "$iface"
     done
 fi
 
