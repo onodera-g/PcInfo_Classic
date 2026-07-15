@@ -45,6 +45,10 @@ wait_any_key() {
     read_key || true
 }
 
+trim_value() {
+    printf '%s\n' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
 get_tty_rows() {
     _size=$(stty size < "$TTY" 2>/dev/null) || return 1
     _rows=$(printf '%s\n' "$_size" | awk '{print $1}')
