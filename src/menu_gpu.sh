@@ -128,21 +128,24 @@ attempt_module_bind() {
     local mod=""
     local mods=""
     local bound=""
+    local modprobe_err=""
 
     slot=$(basename "$dev_path")
     mods=$(target_modules_for_device "$dev_path")
     [ -n "$mods" ] || return 1
+    modprobe_err=$(mktemp /tmp/menu_gpu.modprobe.XXXXXX 2>/dev/null)
+    [ -n "$modprobe_err" ] || modprobe_err="/tmp/menu_gpu.modprobe.err.$$"
 
     for mod in $mods; do
         if module_loaded "$mod"; then
             printf '  %s: already loaded\n' "$mod"
         else
             printf '  modprobe %s ... ' "$mod"
-            if modprobe "$mod" 2>/tmp/menu_gpu.modprobe.err; then
+            if modprobe "$mod" 2>"$modprobe_err"; then
                 printf '%bok%b\n' "$GREEN" "$RESET"
             else
                 printf '%bfail%b\n' "$RED" "$RESET"
-                sed 's/^/    /' /tmp/menu_gpu.modprobe.err 2>/dev/null
+                sed 's/^/    /' "$modprobe_err" 2>/dev/null
                 continue
             fi
         fi
@@ -150,6 +153,7 @@ attempt_module_bind() {
         bound=$(bound_driver_for "$dev_path" 2>/dev/null || true)
         if [ "$bound" = "$mod" ]; then
             printf '  %s: bound to %s\n' "$slot" "$mod"
+            rm -f "$modprobe_err" 2>/dev/null || true
             return 0
         fi
 
@@ -162,20 +166,17 @@ attempt_module_bind() {
         bound=$(bound_driver_for "$dev_path" 2>/dev/null || true)
         if [ "$bound" = "$mod" ]; then
             printf '  %s: bound to %s after rebind\n' "$slot" "$mod"
+            rm -f "$modprobe_err" 2>/dev/null || true
             return 0
         fi
         printf '  %s: %s loaded but did not bind\n' "$slot" "$mod"
     done
+    rm -f "$modprobe_err" 2>/dev/null || true
     return 1
 }
 
 show_cmdline_and_modules() {
     section "Boot state"
-    if [ -r /proc/cmdline ]; then
-        printf "  cmdline: "
-        tr -d '\n' < /proc/cmdline
-        printf '\n'
-    fi
     printf "  loaded GPU modules:"
     local loaded=""
     for m in amdgpu radeon nouveau i915 drm drm_kms_helper ttm simpledrm; do
@@ -189,53 +190,117 @@ show_cmdline_and_modules() {
 }
 
 show_dmesg_for_gpu() {
-    section "dmesg (GPU related, tail 40)"
     local matches=""
     matches=$(dmesg 2>/dev/null \
-        | grep -E '(radeon|amdgpu|nouveau|i915|drm|simpledrm|simple-framebuffer|efifb|firmware)' \
-        | tail -n 40)
-    if [ -n "$matches" ]; then
-        printf '%s\n' "$matches" | sed 's/^/  /'
-    else
-        printf "  ${YELLOW}(no matching dmesg lines)${RESET}\n"
-    fi
+        | grep -E '(radeon|amdgpu|nouveau|nvidia|i915|xe|drm|drm_kms_helper|kms|fbcon|simpledrm|simple-framebuffer|efifb|vesafb|vgaarb|framebuffer|gpu|vga|firmware)' \
+        | tail -n 20)
+    [ -n "$matches" ] || return 0
+    section "dmesg (GPU related, tail 20)"
+    printf '%s\n' "$matches" | sed 's/^/  /'
 }
 
 # Try to load missing modules and rebind unbound GPUs.
 recover_gpu_bindings() {
-    section "Recovery attempt"
-    local dev driver
-    local any_attempted=0
+    local dev driver vendor recovery_mode
+    local gpu_detected=0
+    local attempted_count=0
+    local failed_count=0
+    recovery_mode="${PCINFO_GPU_RECOVERY_MODE:-safe}"
     for dev in $(detect_gpu_devices); do
+        gpu_detected=1
         driver=$(bound_driver_for "$dev" 2>/dev/null || true)
-        case "$driver" in
-            amdgpu|radeon|nouveau|i915)
-                continue
-                ;;
-        esac
-        any_attempted=1
+        if [ -n "$driver" ]; then
+            case "$recovery_mode" in
+                enforce)
+                    vendor=$(cat "$dev/vendor" 2>/dev/null)
+                    case "$vendor:$driver" in
+                        0x1002:amdgpu|0x1002:radeon|0x10de:nouveau|0x8086:i915)
+                            continue
+                            ;;
+                    esac
+                    ;;
+                *)
+                    continue
+                    ;;
+            esac
+        fi
+        if [ "$attempted_count" -eq 0 ]; then
+            section "Recovery attempt"
+            printf "  mode: %s\n" "$recovery_mode"
+        fi
+        attempted_count=$((attempted_count + 1))
         printf "  Trying %s ...\n" "$(basename "$dev")"
-        attempt_module_bind "$dev" || true
+        if ! attempt_module_bind "$dev"; then
+            failed_count=$((failed_count + 1))
+        fi
     done
-    [ "$any_attempted" -eq 0 ] && printf "  ${GREEN}All GPUs already bound, nothing to do${RESET}\n"
+    RECOVERY_ATTEMPTED_COUNT="$attempted_count"
+    if [ "$gpu_detected" -eq 0 ] || [ "$attempted_count" -eq 0 ]; then
+        return 0
+    elif [ "$failed_count" -eq 0 ]; then
+        printf "  ${GREEN}Recovery completed for %s GPU(s)${RESET}\n" "$attempted_count"
+    else
+        printf "  ${YELLOW}Recovery incomplete: %s/%s failed${RESET}\n" "$failed_count" "$attempted_count"
+    fi
 }
 
 show_dri_devices() {
     section "DRM devices"
+    SHOW_DRI_WARN_COUNT=0
     if ! ls /dev/dri/card* >/dev/null 2>&1; then
+        if [ "${SHOW_GPUS_LAST_COUNT:-0}" -eq 0 ]; then
+            printf "  ${YELLOW}[WARN] No GPU detected${RESET}\n"
+            return 0
+        fi
         printf "  ${RED}No /dev/dri/card* device found${RESET}\n"
         printf "  ${RED}[NG] No GPU driver bound at boot${RESET}\n"
+        SHOW_DRI_WARN_COUNT=1
         return 1
     fi
-    local card card_num drm_drv
+    local card card_num drm_drv drv_color status_text
+    local card_dev pci_slot vendor_id device_id pci_map_text
+    local warn_count=0
     for card in /dev/dri/card*; do
         card_num=$(basename "$card")
         drm_drv=""
+        pci_map_text=""
+        card_dev=$(readlink -f "/sys/class/drm/$card_num/device" 2>/dev/null)
         [ -L "/sys/class/drm/$card_num/device/driver" ] && \
             drm_drv=$(basename "$(readlink "/sys/class/drm/$card_num/device/driver" 2>/dev/null)")
-        printf "  %s -> ${GREEN}%s${RESET}\n" "$card" "${drm_drv:-present}"
+        if [ -n "$card_dev" ] && [ -r "$card_dev/vendor" ] && [ -r "$card_dev/device" ]; then
+            pci_slot=$(basename "$card_dev")
+            vendor_id=$(cat "$card_dev/vendor" 2>/dev/null)
+            device_id=$(cat "$card_dev/device" 2>/dev/null)
+            case "$pci_slot" in
+                0000:*)
+                    pci_map_text=" PCI ${pci_slot#0000:} ($(strip_pci_hex_prefix "$vendor_id"):$(strip_pci_hex_prefix "$device_id"))"
+                    ;;
+            esac
+        fi
+        case "$drm_drv" in
+            amdgpu|radeon|nouveau|i915)
+                drv_color="$GREEN"
+                status_text="${GREEN}[OK] supported${RESET}"
+                ;;
+            simpledrm|simple-framebuffer|efifb)
+                drv_color="$YELLOW"
+                status_text="${YELLOW}[WARN] basic framebuffer${RESET}"
+                warn_count=$((warn_count + 1))
+                ;;
+            '')
+                drv_color="$YELLOW"
+                status_text="${YELLOW}[WARN] unbound${RESET}"
+                warn_count=$((warn_count + 1))
+                ;;
+            *)
+                drv_color="$YELLOW"
+                status_text="${YELLOW}[WARN] unsupported or unknown${RESET}"
+                warn_count=$((warn_count + 1))
+                ;;
+        esac
+        printf "  %s -> %b%s%b%s  %s\n" "$card" "$drv_color" "${drm_drv:-unbound}" "$RESET" "$pci_map_text" "$status_text"
     done
-    printf "  ${GREEN}[OK] DRM device(s) available${RESET}\n"
+    SHOW_DRI_WARN_COUNT="$warn_count"
     return 0
 }
 
@@ -283,7 +348,13 @@ get_gpu_sp_estimate_from_cu() {
 }
 
 show_gpus() {
-    section "Detected GPUs"
+    local mode="${1:-full}"
+    local suppress_no_gpu="${2:-0}"
+    if [ "$mode" = "summary" ]; then
+        section "Detected GPUs"
+    else
+        section "Detected GPUs (after)"
+    fi
 
     local gpu_count=0
     local dev vendor device_id subsystem_vendor subsystem_device
@@ -291,6 +362,9 @@ show_gpus() {
     local driver expected driver_text
     local pci_id_text subsys_id_text subsys_label max_sclk max_mclk
     local cu_count sp_estimate pcie_link_width clock_text
+    local gpu_total=0
+
+    gpu_total=$(detect_gpu_devices | awk 'NF { count++ } END { print count + 0 }')
 
     for dev in $(detect_gpu_devices); do
         gpu_count=$((gpu_count + 1))
@@ -306,17 +380,18 @@ show_gpus() {
 
         driver=$(bound_driver_for "$dev" 2>/dev/null || true)
         expected=$(expected_module_for_vendor "$vendor")
-        gpu_vram=$(get_pci_gpu_vram "$dev" "$pci_slot" "$vendor" "$device_id" "$driver" "$subsystem_vendor" "$subsystem_device")
-        gpu_slot_label=$(get_pci_slot_label "$dev" "$pci_slot")
+        if [ "$mode" != "summary" ]; then
+            gpu_vram=$(get_pci_gpu_vram "$dev" "$pci_slot" "$vendor" "$device_id" "$driver" "$subsystem_vendor" "$subsystem_device")
+            gpu_slot_label=$(get_pci_slot_label "$dev" "$pci_slot")
 
-        pci_id_text="$(strip_pci_hex_prefix "$vendor"):$(strip_pci_hex_prefix "$device_id")"
-        if [ -n "$subsystem_vendor" ] && [ -n "$subsystem_device" ]; then
-            subsys_id_text="$(strip_pci_hex_prefix "$subsystem_vendor"):$(strip_pci_hex_prefix "$subsystem_device")"
-        else
-            subsys_id_text=""
-        fi
-        subsys_label=$(get_pci_subsystem_label "$pci_short")
-        max_sclk=$(get_gpu_max_sclk "$dev")
+            pci_id_text="$(strip_pci_hex_prefix "$vendor"):$(strip_pci_hex_prefix "$device_id")"
+            if [ -n "$subsystem_vendor" ] && [ -n "$subsystem_device" ]; then
+                subsys_id_text="$(strip_pci_hex_prefix "$subsystem_vendor"):$(strip_pci_hex_prefix "$subsystem_device")"
+            else
+                subsys_id_text=""
+            fi
+            subsys_label=$(get_pci_subsystem_display_text "$pci_slot" "$subsystem_vendor" "$subsystem_device")
+            max_sclk=$(get_gpu_max_sclk "$dev")
             max_mclk=$(get_gpu_max_mclk "$dev")
             cu_count=$(get_gpu_cu_count "$vendor" "$pci_slot")
             sp_estimate=$(get_gpu_sp_estimate_from_cu "$cu_count")
@@ -330,29 +405,44 @@ show_gpus() {
                     clock_text="MCLK ${max_mclk}"
                 fi
             fi
-
-            if [ -n "$driver" ]; then
-                driver_text="${GREEN}${driver}${RESET}"
-            else
-                driver_text="${RED}not bound (expected: ${expected})${RESET}"
         fi
 
+            if [ -z "$driver" ]; then
+                driver_text="${RED}not bound (expected: ${expected})${RESET}"
+            else
+                case "$vendor:$driver" in
+                    0x1002:amdgpu|0x1002:radeon|0x10de:nouveau|0x8086:i915)
+                        driver_text="${GREEN}${driver}${RESET}"
+                        ;;
+                    *)
+                        driver_text="${YELLOW}${driver}${RESET} (unexpected; expected: ${expected})"
+                        ;;
+                esac
+            fi
+
         group_title "GPU $gpu_count"
-        item "Slot"     "$gpu_slot_label"
-        item "Model"    "$gpu_model"
-        item "PCI ID"   "$pci_id_text"
-        [ -n "$subsys_id_text" ] && item "Subsys ID"  "$subsys_id_text"
-        [ -n "$subsys_label" ]   && item "Subsys"     "$subsys_label"
-        item "VRAM"     "$gpu_vram"
-        [ -n "$cu_count" ]       && item "CU"         "$cu_count"
-        [ -n "$sp_estimate" ]    && item "SP (est.)"  "$sp_estimate"
-        [ -n "$clock_text" ]     && item "Clock"      "$clock_text"
-        item "PCIe Bus" "$pcie_link_width"
-        item "Driver"   "$driver_text"
-        printf "\n"
+        if [ "$mode" = "summary" ]; then
+            item "Model"  "$gpu_model"
+        else
+            item "Slot"     "$gpu_slot_label"
+            item "Model"    "$gpu_model"
+            item "PCI ID"   "$pci_id_text"
+            [ -n "$subsys_id_text" ] && item "Subsys ID"  "$subsys_id_text"
+            [ -n "$subsys_label" ]   && item "Subsys"     "$subsys_label"
+            item "VRAM"     "$gpu_vram"
+            [ -n "$cu_count" ]       && item "CU"         "$cu_count"
+            [ -n "$sp_estimate" ]    && item "SP (est.)"  "$sp_estimate"
+            [ -n "$clock_text" ]     && item "Clock"      "$clock_text"
+            item "PCIe Bus" "$pcie_link_width"
+            item "Driver"   "$driver_text"
+        fi
+        [ "$gpu_count" -lt "$gpu_total" ] && printf "\n"
     done
 
-    [ "$gpu_count" -eq 0 ] && printf "  ${RED}No GPU detected${RESET}\n"
+    if [ "$gpu_count" -eq 0 ] && [ "$suppress_no_gpu" -eq 0 ]; then
+        printf "  ${RED}No GPU detected${RESET}\n"
+    fi
+    SHOW_GPUS_LAST_COUNT="$gpu_count"
 }
 
 # ----- Main -----
@@ -361,14 +451,20 @@ printf '\033[2J\033[H' > "$TTY" 2>/dev/null
     printf "\n${BOLD}${CYAN}[GPU Test]${RESET}\n\n"
     printf "  Inspecting GPU driver state...\n\n"
 
-    show_cmdline_and_modules
-    show_gpus
-    recover_gpu_bindings
-    printf "\n"
-    show_gpus
-    show_dri_devices
-    show_framebuffer
-    show_dmesg_for_gpu
+    show_gpus summary
+    if [ "${SHOW_GPUS_LAST_COUNT:-0}" -gt 0 ]; then
+        recover_gpu_bindings
+        if [ "${RECOVERY_ATTEMPTED_COUNT:-0}" -gt 0 ]; then
+            printf "\n"
+            show_gpus full 1
+        fi
+        show_dri_devices
+        if [ "${RECOVERY_ATTEMPTED_COUNT:-0}" -gt 0 ] || [ "${SHOW_DRI_WARN_COUNT:-0}" -gt 0 ]; then
+            show_cmdline_and_modules
+            show_framebuffer
+            show_dmesg_for_gpu
+        fi
+    fi
 
     printf "\n"
 } > "$TTY" 2>&1
