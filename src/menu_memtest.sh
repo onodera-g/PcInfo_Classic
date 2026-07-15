@@ -21,18 +21,93 @@ _write_grubenv() {
 }
 
 # Find the mount point of the USB FAT32 filesystem already mounted by Alpine init.
+_decode_mount_path() {
+    printf '%s\n' "$1" | sed 's/\\040/ /g; s/\\011/\t/g; s/\\134/\\/g'
+}
+
+_find_pcinfo_device() {
+    local dev=""
+    if [ -e /dev/disk/by-label/PCINFO ]; then
+        dev=$(readlink -f /dev/disk/by-label/PCINFO 2>/dev/null)
+    fi
+    if [ -z "$dev" ] && command -v findfs >/dev/null 2>&1; then
+        dev=$(findfs LABEL=PCINFO 2>/dev/null)
+    fi
+    if [ -z "$dev" ] && command -v blkid >/dev/null 2>&1; then
+        dev=$(blkid -L PCINFO 2>/dev/null)
+    fi
+    [ -n "$dev" ] && printf '%s\n' "$dev"
+}
+
 _find_usb_mountpoint() {
     local dev mp fstype _rest
+    local decoded_mp=""
+    local pcinfo_dev=""
+    local first_vfat_mp=""
+    local first_pcinfo_mp=""
+
+    pcinfo_dev=$(_find_pcinfo_device)
+
+    # 1) Prefer LABEL=PCINFO mount that already contains memtest.efi
     while read -r dev mp fstype _rest; do
         [ "$fstype" = "vfat" ] || continue
-        case "$mp" in /media/*) printf '%s\n' "$mp"; return 0 ;; esac
+        decoded_mp=$(_decode_mount_path "$mp")
+
+        [ -n "$first_vfat_mp" ] || first_vfat_mp="$decoded_mp"
+        if [ -n "$pcinfo_dev" ] && [ "$dev" = "$pcinfo_dev" ]; then
+            [ -n "$first_pcinfo_mp" ] || first_pcinfo_mp="$decoded_mp"
+            if [ -f "$decoded_mp/boot/memtest.efi" ]; then
+                printf '%s\n' "$decoded_mp"
+                return 0
+            fi
+        fi
+        if [ "$dev" = "LABEL=PCINFO" ]; then
+            [ -n "$first_pcinfo_mp" ] || first_pcinfo_mp="$decoded_mp"
+            if [ -f "$decoded_mp/boot/memtest.efi" ]; then
+                printf '%s\n' "$decoded_mp"
+                return 0
+            fi
+        fi
     done < /proc/mounts
-    awk '$3=="vfat"{print $2; exit}' /proc/mounts 2>/dev/null && return 0
+
+    # 2) Fallback: prefer external-media style mountpoints with memtest.efi
+    while read -r dev mp fstype _rest; do
+        [ "$fstype" = "vfat" ] || continue
+        decoded_mp=$(_decode_mount_path "$mp")
+        case "$decoded_mp" in
+            /media/*|/mnt/*)
+                if [ -f "$decoded_mp/boot/memtest.efi" ]; then
+                    printf '%s\n' "$decoded_mp"
+                    return 0
+                fi
+                ;;
+        esac
+    done < /proc/mounts
+
+    # 3) Last fallback: any vfat mount with memtest.efi
+    while read -r dev mp fstype _rest; do
+        [ "$fstype" = "vfat" ] || continue
+        decoded_mp=$(_decode_mount_path "$mp")
+        if [ -f "$decoded_mp/boot/memtest.efi" ]; then
+            printf '%s\n' "$decoded_mp"
+            return 0
+        fi
+    done < /proc/mounts
+
+    # 4) Keep an explanatory error path if vfat is mounted but memtest.efi is missing
+    [ -n "$first_pcinfo_mp" ] && { printf '%s\n' "$first_pcinfo_mp"; return 0; }
+    [ -n "$first_vfat_mp" ] && { printf '%s\n' "$first_vfat_mp"; return 0; }
+
     return 1
 }
 
 run_memtest() {
     local usb_mp
+    local verify_ok=0
+    local sync_ok=0
+    local header_ok=0
+    local size_ok=0
+    local grubenv_size=""
     usb_mp=$(_find_usb_mountpoint)
     if [ -z "$usb_mp" ]; then
         MEMTEST_FAIL="USB FAT32 not mounted (no vfat in /proc/mounts)"
@@ -51,12 +126,38 @@ run_memtest() {
 
     _write_grubenv "$usb_mp/grubenv" 1
     local write_ok=$?
+    if [ "$write_ok" -eq 0 ]; then
+        if grep -q '^memtest_next=1$' "$usb_mp/grubenv" 2>/dev/null; then
+            verify_ok=1
+        fi
+        if grep -q '^# GRUB Environment Block$' "$usb_mp/grubenv" 2>/dev/null; then
+            header_ok=1
+        fi
+        grubenv_size=$(wc -c < "$usb_mp/grubenv" 2>/dev/null)
+        case "$grubenv_size" in
+            1024) size_ok=1 ;;
+        esac
+    fi
 
-    sync
+    if sync; then
+        sync_ok=1
+    fi
     mount -o remount,ro "$usb_mp" 2>/dev/null || true
 
     if [ "$write_ok" -ne 0 ]; then
         MEMTEST_FAIL="Failed to write grubenv to $usb_mp"
+        return 1
+    fi
+    if [ "$verify_ok" -ne 1 ]; then
+        MEMTEST_FAIL="grubenv verification failed on $usb_mp"
+        return 1
+    fi
+    if [ "$header_ok" -ne 1 ] || [ "$size_ok" -ne 1 ]; then
+        MEMTEST_FAIL="grubenv integrity check failed on $usb_mp"
+        return 1
+    fi
+    if [ "$sync_ok" -ne 1 ]; then
+        MEMTEST_FAIL="Failed to sync grubenv changes on $usb_mp"
         return 1
     fi
 
