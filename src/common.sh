@@ -790,6 +790,7 @@ resolve_gpu_model_by_rules() {
         [ -n "$name_regex" ] || continue
         printf '%s\n' "$gpu_name" | grep -Eiq -- "$name_regex" || continue
 
+        refined=""
         case "$rule_type" in
             literal)
                 [ -n "$resolved_name" ] || continue
@@ -868,22 +869,13 @@ get_pci_gpu_model() {
     local vendor="$2"
     local device_id="$3"
     local vendor_name="$4"
-    local subsystem_vendor="$5"
-    local subsystem_device="$6"
     local pci_short=""
     local gpu_name=""
     local refined_name=""
 
     pci_short=$(printf '%s\n' "$pci_slot" | sed 's/^0000://')
 
-    # Prefer subsystem (SVID:SSID) lookup first so ambiguous shared device IDs
-    # can be refined by the external disambiguation rules when needed.
-    # the actual board model instead of the generic pci.ids label that lspci
-    # would otherwise emit.
-    gpu_name=$(lookup_pci_gpu_subsystem_field "$vendor" "$device_id" "$subsystem_vendor" "$subsystem_device" 6 2>/dev/null)
-    gpu_name=$(normalize_gpu_model_name "$gpu_name")
-
-    if [ -z "$gpu_name" ] && command -v lspci > /dev/null 2>&1; then
+    if command -v lspci > /dev/null 2>&1; then
         gpu_name=$(lspci -s "$pci_short" 2>/dev/null | sed 's/.*[Cc]ontroller[^:]*: //')
         gpu_name=$(normalize_gpu_model_name "$gpu_name")
 

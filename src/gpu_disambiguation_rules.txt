@@ -8,6 +8,11 @@
 0x1002|0x687f|Vega 56/64|amd_cu_vram|
 0x1002|0x687f|Vega 10 XL/XT|amd_cu_vram|
 0x1002|0x731f|RX 5600 OEM/5600 XT / 5700/5700 XT|amd_cu_vram|
+0x10de|0x0190|8800 GTS / 8800 GTX|nvidia_vram|
+0x10de|0x13d8|960 OEM / 970M|nvidia_vram|
+0x10de|0x1e30|Quadro RTX 6000/8000|nvidia_vram|
+0x10de|0x1e37|Tesla T10 16GB / GRID RTX T10-2/T10-4/T10-8|nvidia_vram|
+0x10de|0x1e78|Quadro RTX 6000/8000|nvidia_vram|
 0x10de|0x2bb3|RTX PRO 5000 Blackwell / RTX PRO 5000 72GB Blackwell|nvidia_vram|
 
 0x10de|*|.*|nvidia_literal_map|

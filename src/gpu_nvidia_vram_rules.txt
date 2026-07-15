@@ -1,5 +1,24 @@
 # device_id|vram_mb_pattern|resolved_name
 # vram_mb_pattern は shell case パターン
 
+0x0190|32*|GeForce 8800 GTS
+0x0190|64*|GeForce 8800 GTS
+0x0190|768|GeForce 8800 GTX
+0x13d8|2[0-9][0-9][0-9]|GeForce GTX 960 OEM
+0x13d8|3[0-9][0-9][0-9]|GeForce GTX 970M
+0x13d8|4[0-9][0-9][0-9]|GeForce GTX 960 OEM
+0x13d8|6[0-9][0-9][0-9]|GeForce GTX 970M
+0x1e37|2[0-9][0-9][0-9]|NVIDIA GRID RTX T10-2
+0x1e37|4[0-9][0-9][0-9]|NVIDIA GRID RTX T10-4
+0x1e37|8[0-9][0-9][0-9]|NVIDIA GRID RTX T10-8
+0x1e37|1[6-7][0-9][0-9][0-9]|NVIDIA Tesla T10 16GB
+0x1e30|24*|NVIDIA Quadro RTX 6000
+0x1e30|25*|NVIDIA Quadro RTX 6000
+0x1e30|48*|NVIDIA Quadro RTX 8000
+0x1e30|51*|NVIDIA Quadro RTX 8000
+0x1e78|24*|NVIDIA Quadro RTX 6000
+0x1e78|25*|NVIDIA Quadro RTX 6000
+0x1e78|48*|NVIDIA Quadro RTX 8000
+0x1e78|51*|NVIDIA Quadro RTX 8000
 0x2bb3|7*|NVIDIA RTX PRO 5000 72GB Blackwell
 0x2bb3|*|NVIDIA RTX PRO 5000 Blackwell

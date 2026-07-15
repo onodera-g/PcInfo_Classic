@@ -12,7 +12,19 @@
 0x1f36|Quadro RTX 3000 Mobile / Max-Q|NVIDIA Quadro RTX 3000 Mobile
 0x1f50|2070 Mobile / Max-Q|GeForce RTX 2070 Laptop GPU
 0x1f91|1650 Mobile / Max-Q|GeForce GTX 1650 Laptop GPU
+0x1f96|1650 Mobile / Max-Q|GeForce GTX 1650 Laptop GPU
+0x1f99|1650 Mobile / Max-Q|GeForce GTX 1650 Laptop GPU
+0x1f9d|1650 Mobile / Max-Q|GeForce GTX 1650 Laptop GPU
 0x1f14|2070 Mobile / Max-Q Refresh|GeForce RTX 2070 Laptop GPU
+0x0190|8800 GTS / 8800 GTX|GeForce 8800 GTS / GeForce 8800 GTX
+0x0612|^GeForce 9800 GTX\+$|GeForce 9800 GTX / GeForce 9800 GTX+
+0x0612|9800 GTX / 9800 GTX\+|GeForce 9800 GTX / GeForce 9800 GTX+
+0x0612|^GeForce 9800 GTX$|GeForce 9800 GTX / GeForce 9800 GTX+
+0x13d8|960 OEM / 970M|GeForce GTX 960 OEM / GeForce GTX 970M
+0x2bb3|RTX PRO 5000 Blackwell / RTX PRO 5000 72GB Blackwell|NVIDIA RTX PRO 5000 Blackwell / NVIDIA RTX PRO 5000 72GB Blackwell
+0x222f|3080 11GB / 12GB Engineering Sample|GeForce RTX 3080 Engineering Sample
+0x25ac|RTX 3050 6GB Laptop GPU|GeForce RTX 3050 6GB Laptop GPU
+0x25ec|RTX 3050 6GB Laptop GPU|GeForce RTX 3050 6GB Laptop GPU
 0x28b0|RTX 2000 / 2000E Ada Generation|NVIDIA RTX 2000 Ada Generation
 
 0x249c|3080 Mobile / Max-Q|GeForce RTX 3080 Laptop GPU
