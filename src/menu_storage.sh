@@ -13,8 +13,26 @@ item() {
     render_item_escaped "$label" "$value"
 }
 
-trim_value() {
-    printf '%s\n' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+item_if_meaningful() {
+    local label="$1"
+    local value=""
+
+    value=$(trim_value "$2")
+    case "$value" in
+        ''|N/A|Unknown) return 0 ;;
+    esac
+    item "$label" "$value"
+}
+
+show_smart_unavailable_device() {
+    local dev="$1"
+    local model="$2"
+    local interface="$3"
+
+    item "Device" "$dev"
+    item_if_meaningful "Model" "$model"
+    [ -n "$interface" ] && [ "$interface" != "Unknown" ] && item "Interface" "$interface"
+    item "Health Status" "SMART unavailable"
 }
 
 value_or_na() {
@@ -44,6 +62,22 @@ detect_storage_interface() {
         *"/pci"*)   echo "PCIe" ;;
         *)          echo "Unknown" ;;
     esac
+}
+
+list_health_target_devices() {
+    local sys_dev=""
+    local dev_name=""
+    local dev_path=""
+
+    for sys_dev in /sys/class/block/*; do
+        [ -e "$sys_dev" ] || continue
+        dev_name=$(basename "$sys_dev")
+        printf '%s\n' "$dev_name" | grep -Eq '^(sd[a-z]+|nvme[0-9]+n[0-9]+|mmcblk[0-9]+|vd[a-z]+|xvd[a-z]+)$' || continue
+        [ -f "$sys_dev/partition" ] && continue
+        dev_path="/dev/$dev_name"
+        [ -b "$dev_path" ] || continue
+        printf '%s\n' "$dev_path"
+    done
 }
 
 normalize_integer_token() {
@@ -276,7 +310,24 @@ extract_smart_attr_raw() {
     local text="$1"
     local attr_id="$2"
 
-    printf '%s\n' "$text" | awk -v id="$attr_id" '$1 == id { print $10; exit }'
+    printf '%s\n' "$text" | awk -v id="$attr_id" '
+        function trim(s) {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+            return s
+        }
+        $1 == id {
+            if (NF >= 10) {
+                raw = $10
+                for (i = 11; i <= NF; i++) {
+                    raw = raw " " $i
+                }
+                print trim(raw)
+            } else if (NF > 0) {
+                print trim($NF)
+            }
+            exit
+        }
+    '
 }
 
 extract_smart_temperature() {
@@ -303,14 +354,27 @@ extract_smart_life_percent() {
     local mode=""
 
     match=$(printf '%s\n' "$text" | awk '
+        function raw_value(    i, out) {
+            if (NF >= 10) {
+                out = $10
+                for (i = 11; i <= NF; i++) {
+                    out = out " " $i
+                }
+                return out
+            }
+            if (NF > 0) {
+                return $NF
+            }
+            return ""
+        }
         {
             name = tolower($2)
-            if (name ~ /media_wearout_indicator|wear_leveling_count|percent_lifetime_remain|ssd_life_left|remaining_lifetime_persent|remaining_lifetime_pct|remaining_lifetime_perc/) {
-                print "remaining\t" $4 "\t" $10
+            if (name ~ /media_wearout_indicator|wear_leveling_count|percent_lifetime_remain|percent_lifetime_remaining|ssd_life_left|remaining_lifetime_persent|remaining_lifetime_pct|remaining_lifetime_perc|remaining_life|lifetime_left|life_remaining|available_reserved_space/) {
+                print "remaining\t" $4 "\t" raw_value()
                 exit
             }
-            if (name ~ /perc_rated_life_used|percentage_used_reserved_block_count_total/) {
-                print "used\t" $4 "\t" $10
+            if (name ~ /perc_rated_life_used|percentage_used_reserved_block_count_total|percentage_used|lifetime_used|wearout/) {
+                print "used\t" $4 "\t" raw_value()
                 exit
             }
         }
@@ -352,18 +416,31 @@ extract_smart_total_writes_gb() {
     local raw=""
 
     match=$(printf '%s\n' "$text" | awk '
+        function raw_value(    i, out) {
+            if (NF >= 10) {
+                out = $10
+                for (i = 11; i <= NF; i++) {
+                    out = out " " $i
+                }
+                return out
+            }
+            if (NF > 0) {
+                return $NF
+            }
+            return ""
+        }
         {
             name = tolower($2)
-            if (name ~ /host_writes_32mib|nand_writes_32mib/) {
-                print "32mib\t" $10
+            if (name ~ /host_writes_32mib|nand_writes_32mib|host_write_32mib/) {
+                print "32mib\t" raw_value()
                 exit
             }
-            if (name ~ /host_writes_gib|nand_writes_1gib|total_writes_gib|lifetime_writes_from_host/) {
-                print "gib\t" $10
+            if (name ~ /host_writes_gib|nand_writes_1gib|total_writes_gib|lifetime_writes_from_host|host_writes|host_written|host_write_commands|total_host_writes|nand_writes|total_nand_writes/) {
+                print "gib\t" raw_value()
                 exit
             }
             if (name ~ /total_lbas_written|lbas_written|host_writes/) {
-                print "lba512\t" $10
+                print "lba512\t" raw_value()
                 exit
             }
         }
@@ -387,6 +464,12 @@ extract_sata_health_status() {
     local media_errors="$5"
     local status=""
     local label="Good"
+    local has_signal=0
+    local severity=0
+    local reallocated_dec=""
+    local pending_dec=""
+    local media_errors_dec=""
+    local remaining_dec=""
 
     status=$(printf '%s\n' "$overall" | sed -n \
         -e 's/^SMART overall-health self-assessment test result:[[:space:]]*//p' \
@@ -395,38 +478,69 @@ extract_sata_health_status() {
 
     case "$status" in
         FAILED*|BAD*)
-            label="Bad"
+            severity=2
+            has_signal=1
             ;;
-        ''|Unknown)
-            label="N/A"
+        '')
+            ;;
+        Unknown)
             ;;
         *)
-            case "$(to_decimal_value "$reallocated")" in
-                ''|*[!0-9]*) ;;
-                *) [ "$(to_decimal_value "$reallocated")" -gt 0 ] && label="Caution" ;;
-            esac
-            case "$(to_decimal_value "$pending")" in
-                ''|*[!0-9]*) ;;
-                *) [ "$(to_decimal_value "$pending")" -gt 0 ] && label="Caution" ;;
-            esac
-            case "$(to_decimal_value "$media_errors")" in
-                ''|*[!0-9]*) ;;
-                *) [ "$(to_decimal_value "$media_errors")" -gt 0 ] && label="Caution" ;;
-            esac
-            case "$(to_decimal_value "$remaining_percent")" in
-                ''|*[!0-9]*) ;;
-                *)
-                    if [ "$(to_decimal_value "$remaining_percent")" -le 0 ]; then
-                        label="Bad"
-                    elif [ "$(to_decimal_value "$remaining_percent")" -le 10 ] && [ "$label" = "Good" ]; then
-                        label="Caution"
-                    fi
-                    ;;
-            esac
+            has_signal=1
             ;;
     esac
 
-    if [ "$label" = "N/A" ]; then
+    reallocated_dec=$(to_decimal_value "$reallocated")
+    pending_dec=$(to_decimal_value "$pending")
+    media_errors_dec=$(to_decimal_value "$media_errors")
+    remaining_dec=$(to_decimal_value "$remaining_percent")
+
+    case "$reallocated_dec" in
+        ''|*[!0-9]*) ;;
+        *)
+            has_signal=1
+            if [ "$reallocated_dec" -gt 0 ] && [ "$severity" -lt 1 ]; then
+                severity=1
+            fi
+            ;;
+    esac
+    case "$pending_dec" in
+        ''|*[!0-9]*) ;;
+        *)
+            has_signal=1
+            if [ "$pending_dec" -gt 0 ] && [ "$severity" -lt 1 ]; then
+                severity=1
+            fi
+            ;;
+    esac
+    case "$media_errors_dec" in
+        ''|*[!0-9]*) ;;
+        *)
+            has_signal=1
+            if [ "$media_errors_dec" -gt 0 ] && [ "$severity" -lt 1 ]; then
+                severity=1
+            fi
+            ;;
+    esac
+    case "$remaining_dec" in
+        ''|*[!0-9]*) ;;
+        *)
+            has_signal=1
+            if [ "$remaining_dec" -le 0 ]; then
+                severity=2
+            elif [ "$remaining_dec" -le 10 ] && [ "$severity" -lt 1 ]; then
+                severity=1
+            fi
+            ;;
+    esac
+
+    case "$severity" in
+        2) label="Bad" ;;
+        1) label="Caution" ;;
+        *) label="Good" ;;
+    esac
+
+    if [ "$has_signal" -eq 0 ]; then
         printf '%s\n' 'N/A'
     elif [ "$remaining_percent" = "N/A" ] || [ -z "$remaining_percent" ]; then
         printf '%s\n' "$label"
@@ -439,7 +553,19 @@ extract_sata_health_status() {
 # The output format is "FieldName:    value", e.g. "Temperature:   35 Celsius"
 # Usage: extract_nvme_field "$smart" "Temperature"
 extract_nvme_field() {
-    printf '%s\n' "$1" | grep "^$2:" | head -n 1 | cut -d: -f2- | sed 's/^[[:space:]]*//'
+    printf '%s\n' "$1" | awk -F ':' -v key="$2" '
+        {
+            field=$1
+            sub(/^[[:space:]]+/, "", field)
+            sub(/[[:space:]]+$/, "", field)
+            if (field == key) {
+                value=substr($0, index($0, ":") + 1)
+                sub(/^[[:space:]]+/, "", value)
+                print value
+                exit
+            }
+        }
+    '
 }
 
 extract_nvme_remaining_life() {
@@ -473,6 +599,73 @@ extract_nvme_media_errors() {
     to_decimal_value "$raw"
 }
 
+normalize_nvme_critical_warning() {
+    local raw="$1"
+    local value=""
+    local lowered=""
+
+    value=$(to_decimal_value "$raw")
+    case "$value" in
+        ''|*[!0-9]*)
+            lowered=$(printf '%s\n' "$raw" | tr '[:upper:]' '[:lower:]')
+            case "$lowered" in
+                *available*spare*|*temperature*|*degrad*|*read*only*|*volatile*memory*backup*)
+                    printf '%s\n' '1'
+                    return 0
+                    ;;
+            esac
+            printf '\n'
+            ;;
+        *)
+            printf '%s\n' "$value"
+            ;;
+    esac
+}
+
+has_sata_smart_attr_table() {
+    printf '%s\n' "$1" | grep -qE '^[[:space:]]*[0-9]+ [A-Za-z_]+[[:space:]]'
+}
+
+has_sata_smart_health_line() {
+    printf '%s\n' "$1" | grep -qE '^SMART overall-health self-assessment test result:|^SMART Health Status:'
+}
+
+read_sata_smart_output() {
+    local dev="$1"
+    local interface="$2"
+    local first_dtype=""
+    local smart=""
+    local _dtype=""
+
+    case "$interface" in
+        SATA) first_dtype="ata" ;;
+        SAS)  first_dtype="scsi" ;;
+    esac
+
+    if [ -n "$first_dtype" ]; then
+        smart=$(smartctl -a -d "$first_dtype" "$dev" 2>/dev/null)
+    fi
+    if has_sata_smart_attr_table "$smart" || has_sata_smart_health_line "$smart"; then
+        printf '%s\n' "$smart"
+        return 0
+    fi
+
+    for _dtype in sat sat,12 ata scsi ""; do
+        [ "$_dtype" = "$first_dtype" ] && continue
+        if [ -z "$_dtype" ]; then
+            smart=$(smartctl -a "$dev" 2>/dev/null)
+        else
+            smart=$(smartctl -a -d "$_dtype" "$dev" 2>/dev/null)
+        fi
+        if has_sata_smart_attr_table "$smart" || has_sata_smart_health_line "$smart"; then
+            printf '%s\n' "$smart"
+            return 0
+        fi
+    done
+
+    printf '%s\n' "$smart"
+}
+
 extract_sata_media_errors() {
     local text="$1"
     local value=""
@@ -500,151 +693,160 @@ show_smart_info() {
     local reallocated=""
     local pending=""
     local health=""
+    local critical_warning_raw=""
+    local critical_warning_dec=""
+    local has_attr_table=""
+    local has_health_line=""
+
+    if ! command -v smartctl > /dev/null 2>&1; then
+        printf "${YELLOW}smartmontools not installed${RESET}\n"
+        return 0
+    fi
 
     case "$dev" in
         /dev/nvme*)
-            section "Storage Health"
-            if command -v smartctl > /dev/null 2>&1; then
-                # Per spec: use smartctl -d nvme on the controller device for best compatibility.
-                # Derive controller from namespace path (e.g., nvme0n1 -> nvme0).
-                local ctrl
-                ctrl=$(printf '%s\n' "$dev" | sed 's/n[0-9]*$//')
-                smart=$(smartctl -a -d nvme "$ctrl" 2>/dev/null)
-                # Verify the SMART/Health section is present in the output
-                if ! printf '%s\n' "$smart" | grep -q "^SMART/Health Information"; then
-                    printf "  ${YELLOW}NVMe SMART data unavailable${RESET}\n"
-                    return 0
-                fi
-
+            # Per spec: use smartctl -d nvme on the controller device for best compatibility.
+            # Derive controller from namespace path (e.g., nvme0n1 -> nvme0).
+            local ctrl
+            ctrl=$(printf '%s\n' "$dev" | sed 's/n[0-9]*$//')
+            smart=$(smartctl -a -d nvme "$ctrl" 2>/dev/null)
+            # Verify the SMART/Health section is present in the output
+            if ! printf '%s\n' "$smart" | grep -q "^SMART/Health Information"; then
                 model=$(get_device_model "$dev")
-                capacity=$(get_device_capacity "$dev")
-                remaining=$(extract_nvme_remaining_life "$smart")
-                media_errors=$(extract_nvme_media_errors "$smart")
-                # smartctl -d nvme output contains the same health result line as ATA
-                health=$(extract_sata_health_status "$smart" "$remaining" "" "" "$media_errors")
-
-                item "Device" "$dev"
-                item "Model" "$model"
-                item "Capacity" "$capacity"
-                item "Interface" "NVMe"
-                item "Health Status" "$health"
-                value=$(to_decimal_value "$(extract_nvme_field "$smart" "Temperature")")
-                item "Temperature" "$(format_temperature "$value")"
-                item "Total Host Writes" "$(extract_nvme_total_writes_gb "$smart")"
-                value=$(to_decimal_value "$(extract_nvme_field "$smart" "Power Cycles")")
-                item "Power On Count" "$(format_count "$value")"
-                value=$(to_decimal_value "$(extract_nvme_field "$smart" "Power On Hours")")
-                item "Power On Hours" "$(format_hours "$value")"
-                item "Available Spare" "$(value_or_na "$(extract_nvme_field "$smart" "Available Spare")")"
-                item "Spare Threshold" "$(value_or_na "$(extract_nvme_field "$smart" "Available Spare Threshold")")"
-                item "Media Errors" "$(value_or_na "$media_errors")"
-            else
-                printf "${YELLOW}smartmontools not installed${RESET}\n"
+                show_smart_unavailable_device "$dev" "$model" "NVMe"
+                return 0
             fi
+
+            model=$(get_device_model "$dev")
+            capacity=$(get_device_capacity "$dev")
+            remaining=$(extract_nvme_remaining_life "$smart")
+            media_errors=$(extract_nvme_media_errors "$smart")
+            # smartctl -d nvme output contains the same health result line as ATA
+            health=$(extract_sata_health_status "$smart" "$remaining" "" "" "$media_errors")
+            critical_warning_raw=$(extract_nvme_field "$smart" "Critical Warning")
+            critical_warning_dec=$(normalize_nvme_critical_warning "$critical_warning_raw")
+            case "$critical_warning_dec" in
+                ''|*[!0-9]*|0) ;;
+                *) health="Bad" ;;
+            esac
+
+            item "Device" "$dev"
+            item "Model" "$model"
+            item_if_meaningful "Capacity" "$capacity"
+            item "Interface" "NVMe"
+            item "Health Status" "$health"
+            value=$(to_decimal_value "$(extract_nvme_field "$smart" "Temperature")")
+            item_if_meaningful "Temperature" "$(format_temperature "$value")"
+            item_if_meaningful "Total Host Writes" "$(extract_nvme_total_writes_gb "$smart")"
+            value=$(to_decimal_value "$(extract_nvme_field "$smart" "Power Cycles")")
+            item_if_meaningful "Power On Count" "$(format_count "$value")"
+            value=$(to_decimal_value "$(extract_nvme_field "$smart" "Power On Hours")")
+            item_if_meaningful "Power On Hours" "$(format_hours "$value")"
+            item_if_meaningful "Critical Warning" "$(value_or_na "$critical_warning_raw")"
+            item_if_meaningful "Available Spare" "$(value_or_na "$(extract_nvme_field "$smart" "Available Spare")")"
+            item_if_meaningful "Spare Threshold" "$(value_or_na "$(extract_nvme_field "$smart" "Available Spare Threshold")")"
+            item_if_meaningful "Media Errors" "$(value_or_na "$media_errors")"
             ;;
         *)
-            section "Storage Health"
-            if command -v smartctl > /dev/null 2>&1; then
-                model=$(get_device_model "$dev")
-                capacity=$(get_device_capacity "$dev")
-                interface=$(detect_storage_interface "$dev")
-                local dev_name rotational drive_type
-                dev_name=$(basename "$dev")
-                rotational=$(cat "/sys/class/block/$dev_name/queue/rotational" 2>/dev/null)
-                case "$rotational" in
-                    0) drive_type="SSD" ;;
-                    1) drive_type="HDD" ;;
-                    *) drive_type="" ;;
-                esac
+            model=$(get_device_model "$dev")
+            capacity=$(get_device_capacity "$dev")
+            interface=$(detect_storage_interface "$dev")
+            local dev_name rotational drive_type
+            dev_name=$(basename "$dev")
+            rotational=$(cat "/sys/class/block/$dev_name/queue/rotational" 2>/dev/null)
+            case "$rotational" in
+                0) drive_type="SSD" ;;
+                1) drive_type="HDD" ;;
+                *) drive_type="" ;;
+            esac
 
-                # Check SMART availability/status via -i before attempting data read
-                # Per smartmontools docs, -i is lightweight and shows SMART support state
-                local smart_info smart_avail smart_en
-                smart_info=$(smartctl -i "$dev" 2>/dev/null)
-                smart_avail=$(printf '%s\n' "$smart_info" | grep -c 'SMART support is:.*Available' || true)
-                smart_en=$(printf '%s\n' "$smart_info" | grep -c 'SMART support is:.*Enabled' || true)
+            smart=$(read_sata_smart_output "$dev" "$interface")
 
-                # Enable SMART if disabled (drive supports it but it's turned off)
-                if [ "$smart_avail" -gt 0 ] && [ "$smart_en" -eq 0 ]; then
-                    smartctl -s on "$dev" 2>/dev/null || true
-                fi
-
-                # Per Arch wiki: for SATA drives, specifying -d ata prevents smartctl
-                # from issuing SCSI commands. Try interface-appropriate type first.
-                local first_dtype=""
-                case "$interface" in
-                    SATA) first_dtype="ata" ;;
-                    SAS)  first_dtype="scsi" ;;
-                esac
-
-                smart=""
-                if [ -n "$first_dtype" ]; then
-                    smart=$(smartctl -a -d "$first_dtype" "$dev" 2>/dev/null)
-                fi
-                # Fallback: try remaining device types if no attribute table found
-                if ! printf '%s\n' "$smart" | grep -qE '^[[:space:]]*[0-9]+ [A-Za-z_]+[[:space:]]'; then
-                    for _dtype in sat sat,12 ata scsi ""; do
-                        [ "$_dtype" = "$first_dtype" ] && continue
-                        if [ -z "$_dtype" ]; then
-                            smart=$(smartctl -a "$dev" 2>/dev/null)
-                        else
-                            smart=$(smartctl -a -d "$_dtype" "$dev" 2>/dev/null)
-                        fi
-                        if printf '%s\n' "$smart" | grep -qE '^[[:space:]]*[0-9]+ [A-Za-z_]+[[:space:]]'; then
-                            break
-                        fi
-                    done
-                fi
-
-                # overall health is embedded in $smart (-a includes -H output)
-                overall="$smart"
-                remaining=$(extract_smart_life_percent "$smart")
-                reallocated=$(extract_smart_attr_raw "$smart" 5)
-                pending=$(extract_smart_attr_raw "$smart" 197)
-                media_errors=$(extract_sata_media_errors "$smart")
-                health=$(extract_sata_health_status "$overall" "$remaining" "$reallocated" "$pending" "$media_errors")
-                # ID 187: Reported_Uncorrectable_Errors - per spec, non-zero = immediate replacement
-                local uncorrectable
-                uncorrectable=$(to_decimal_value "$(extract_smart_attr_raw "$smart" 187)")
-                case "$uncorrectable" in
-                    ''|*[!0-9]*|0) ;;
-                    *) health="Bad" ;;
-                esac
-
-                item "Device" "$dev"
-                item "Model" "$([ -n "$drive_type" ] && printf '%s (%s)' "$model" "$drive_type" || printf '%s' "$model")"
-                item "Capacity" "$capacity"
-                item "Interface" "$interface"
-                item "Health Status" "$health"
-                item "Temperature" "$(format_temperature "$(extract_smart_temperature "$smart")")"
-                item "Total Host Writes" "$(extract_smart_total_writes_gb "$smart")"
-                value=$(extract_smart_attr_raw "$smart" 12)
-                item "Power On Count" "$(format_count "$value")"
-                value=$(extract_smart_attr_raw "$smart" 9)
-                item "Power On Hours" "$(format_hours "$value")"
-                item "Reallocated Sectors" "$(value_or_na "$reallocated")"
-                item "Pending Sectors" "$(value_or_na "$pending")"
-                item "Reported Uncorrectable" "$(value_or_na "$(extract_smart_attr_raw "$smart" 187)")"
-                item "Media Errors" "$(value_or_na "$media_errors")"
-            else
-                printf "${YELLOW}smartmontools not installed${RESET}\n"
+            has_attr_table=0
+            has_health_line=0
+            if has_sata_smart_attr_table "$smart"; then
+                has_attr_table=1
             fi
+            if has_sata_smart_health_line "$smart"; then
+                has_health_line=1
+            fi
+            if [ "$has_attr_table" -eq 0 ] && [ "$has_health_line" -eq 0 ]; then
+                show_smart_unavailable_device "$dev" "$([ -n "$drive_type" ] && printf '%s (%s)' "$model" "$drive_type" || printf '%s' "$model")" "$interface"
+                return 0
+            fi
+
+            # overall health is embedded in $smart (-a includes -H output)
+            overall="$smart"
+            remaining=$(extract_smart_life_percent "$smart")
+            reallocated=$(extract_smart_attr_raw "$smart" 5)
+            pending=$(extract_smart_attr_raw "$smart" 197)
+            media_errors=$(extract_sata_media_errors "$smart")
+            health=$(extract_sata_health_status "$overall" "$remaining" "$reallocated" "$pending" "$media_errors")
+            # ID 187: Reported_Uncorrectable_Errors - per spec, non-zero = immediate replacement
+            local uncorrectable
+            uncorrectable=$(to_decimal_value "$(extract_smart_attr_raw "$smart" 187)")
+            case "$uncorrectable" in
+                ''|*[!0-9]*|0) ;;
+                *) health="Bad" ;;
+            esac
+
+            item "Device" "$dev"
+            item "Model" "$([ -n "$drive_type" ] && printf '%s (%s)' "$model" "$drive_type" || printf '%s' "$model")"
+            item_if_meaningful "Capacity" "$capacity"
+            [ -n "$interface" ] && [ "$interface" != "Unknown" ] && item "Interface" "$interface"
+            item "Health Status" "$health"
+            item_if_meaningful "Temperature" "$(format_temperature "$(extract_smart_temperature "$smart")")"
+            item_if_meaningful "Total Host Writes" "$(extract_smart_total_writes_gb "$smart")"
+            value=$(extract_smart_attr_raw "$smart" 12)
+            item_if_meaningful "Power On Count" "$(format_count "$value")"
+            value=$(extract_smart_attr_raw "$smart" 9)
+            item_if_meaningful "Power On Hours" "$(format_hours "$value")"
+            item_if_meaningful "Reallocated Sectors" "$(value_or_na "$reallocated")"
+            item_if_meaningful "Pending Sectors" "$(value_or_na "$pending")"
+            item_if_meaningful "Reported Uncorrectable" "$(value_or_na "$(extract_smart_attr_raw "$smart" 187)")"
+            item_if_meaningful "Media Errors" "$(value_or_na "$media_errors")"
             ;;
     esac
 }
 
 # Main
 {
-    found=0
-    for d in /dev/nvme?n? /dev/sd?; do
+    section "Storage Health"
+    targets=""
+    iface=""
+    storage_index=0
+    storage_seen=0
+    storage_usb_skipped=0
+
+    for d in $(list_health_target_devices); do
         [ -b "$d" ] || continue
-        [ "$(detect_storage_interface "$d")" = "USB" ] && continue
-        found=1
-        show_smart_info "$d"
-        printf "\n"
+        storage_seen=$((storage_seen + 1))
+        iface=$(detect_storage_interface "$d")
+        if [ "$iface" = "USB" ]; then
+            storage_usb_skipped=$((storage_usb_skipped + 1))
+            continue
+        fi
+        if [ -n "$targets" ]; then
+            targets="${targets}
+$d"
+        else
+            targets="$d"
+        fi
     done
 
-    if [ "$found" -eq 0 ]; then
-        printf "${BOLD}${CYAN}[Storage Health]${RESET}\n\nNo storage devices found.\n"
+    storage_total=$(printf '%s\n' "$targets" | awk 'NF { count++ } END { print count + 0 }')
+    if [ "$storage_total" -gt 0 ]; then
+        printf '%s\n' "$targets" | while IFS= read -r d; do
+            [ -n "$d" ] || continue
+            storage_index=$((storage_index + 1))
+            show_smart_info "$d"
+            [ "$storage_index" -lt "$storage_total" ] && printf "\n"
+        done
+    else
+        if [ "$storage_seen" -gt 0 ] && [ "$storage_usb_skipped" -eq "$storage_seen" ]; then
+            printf "Only USB storage detected (excluded from health check).\n"
+        else
+            printf "No storage devices found.\n"
+        fi
     fi
 } | show_paged_blocks
