@@ -2,7 +2,7 @@
 Generated: 2026-06-28 07:29:20 +09:00
 Source base file: gpu_ambiguous_all_entries.txt
 Filter scope: NVIDIA GTX 2xx series+ / AMD HD 3000 series+
-Total entries: 164
+Total entries: 163
 
 1002:1309|Kaveri [Radeon R6/R7 Graphics]
 1002:15d8|Picasso/Raven 2 [Radeon Vega Series / Radeon Vega Mobile Series]
@@ -99,7 +99,6 @@ Total entries: 164
 1002:7300|Fiji [Radeon R9 FURY / NANO Series]
 1002:731f|Navi 10 [Radeon RX 5600 OEM/5600 XT / 5700/5700 XT]
 1002:7340|Navi 14 [Radeon RX 5500/5500M / Pro 5300/5300M/5500M]
-1002:73bf|Navi 21 [Radeon RX 6800/6800 XT / 6900 XT]
 1002:73df|Navi 22 [Radeon RX 6700/6700 XT/6750 XT / 6800M/6850M XT]
 1002:73ef|Navi 23 [Radeon RX 6650 XT / 6700S / 6800S]
 1002:73ff|Navi 23 [Radeon RX 6600/6600 XT/6600M]

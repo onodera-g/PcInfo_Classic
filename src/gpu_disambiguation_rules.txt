@@ -8,6 +8,10 @@
 0x1002|0x687f|Vega 56/64|amd_cu_vram|
 0x1002|0x687f|Vega 10 XL/XT|amd_cu_vram|
 0x1002|0x731f|RX 5600 OEM/5600 XT / 5700/5700 XT|amd_cu_vram|
+0x1002|0x7340|RX 5500/5500M / Pro 5300/5300M/5500M|amd_cu_vram|
+0x1002|0x7340|RX 5500/5500M / Pro 5300/5300M/5500M|literal|Radeon RX 5500 / RX 5500M / Radeon Pro 5300 / Radeon Pro 5300M / Radeon Pro 5500M
+0x1002|0x73bf|RX 6800/6800 XT / 6900 XT|amd_cu_vram|
+0x1002|0x73bf|RX 6900 Series|amd_cu_vram|
 0x10de|0x0190|8800 GTS / 8800 GTX|nvidia_vram|
 0x10de|0x13d8|960 OEM / 970M|nvidia_vram|
 0x10de|0x1e30|Quadro RTX 6000/8000|nvidia_vram|

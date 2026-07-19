@@ -12,3 +12,10 @@
 0x731f|36|6[0-9][0-9][0-9]|Radeon RX 5600 XT
 0x731f|32|5[0-9][0-9][0-9]|Radeon RX 5600
 0x731f|32|6[0-9][0-9][0-9]|Radeon RX 5600
+
+0x7340|24|*|Radeon Pro 5500M
+0x7340|20|*|Radeon Pro 5300M
+
+0x73bf|80|*|Radeon RX 6900 XT
+0x73bf|72|*|Radeon RX 6800 XT
+0x73bf|60|*|Radeon RX 6800
