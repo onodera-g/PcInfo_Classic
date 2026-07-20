@@ -19,3 +19,15 @@
 0x73bf|80|*|Radeon RX 6900 XT
 0x73bf|72|*|Radeon RX 6800 XT
 0x73bf|60|*|Radeon RX 6800
+
+0x73df|36|10[0-9][0-9][0-9]|Radeon RX 6700
+0x73df|40|12[0-9][0-9][0-9]|Radeon RX 6700 XT / 6750 XT / 6800M / 6850M XT
+
+0x73ef|28|8[0-9][0-9][0-9]|Radeon RX 6700S
+0x73ef|32|8[0-9][0-9][0-9]|Radeon RX 6650 XT / 6800S
+
+0x73ff|32|8[0-9][0-9][0-9]|Radeon RX 6600 XT
+0x73ff|28|8[0-9][0-9][0-9]|Radeon RX 6600 / 6600M
+
+0x743f|12|4[0-9][0-9][0-9]|Radeon RX 6400
+0x743f|16|4[0-9][0-9][0-9]|Radeon RX 6500 XT / 6500M
