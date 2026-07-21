@@ -16,6 +16,11 @@
 0x1002|0x73ef|RX 6650 XT / 6700S / 6800S|amd_cu_vram|
 0x1002|0x73ff|RX 6600/6600 XT/6600M|amd_cu_vram|
 0x1002|0x743f|RX 6400/6500 XT/6500M|amd_cu_vram|
+0x1002|0x744c|RX 7900 XT/7900 XTX/7900 GRE/7900M|amd_cu_vram|
+0x1002|0x747e|RX 7700 XT / 7800 XT|amd_cu_vram|
+0x1002|0x7480|RX 7600/7600 XT/7600M XT/7600S/7700S / PRO W7600|amd_cu_vram|
+0x1002|0x7483|RX 7600M/7600M XT|amd_cu_vram|
+0x1002|0x7550|RX 9070/9070 XT/9070 GRE|amd_cu_vram|
 0x10de|0x0190|8800 GTS / 8800 GTX|nvidia_vram|
 0x10de|0x13d8|960 OEM / 970M|nvidia_vram|
 0x10de|0x1e30|Quadro RTX 6000/8000|nvidia_vram|

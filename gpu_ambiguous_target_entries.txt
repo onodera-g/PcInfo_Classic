@@ -2,7 +2,7 @@
 Generated: 2026-06-28 07:29:20 +09:00
 Source base file: gpu_ambiguous_all_entries.txt
 Filter scope: NVIDIA GTX 2xx series+ / AMD HD 3000 series+
-Total entries: 159
+Total entries: 154
 
 1002:1309|Kaveri [Radeon R6/R7 Graphics]
 1002:15d8|Picasso/Raven 2 [Radeon Vega Series / Radeon Vega Mobile Series]
@@ -102,12 +102,7 @@ Total entries: 159
 1002:7408|Aldebaran/MI200 [Instinct MI250X]
 1002:740c|Aldebaran/MI200 [Instinct MI250X/MI250]
 1002:740f|Aldebaran/MI200 [Instinct MI210]
-1002:744c|Navi 31 [Radeon RX 7900 XT/7900 XTX/7900 GRE/7900M]
-1002:747e|Navi 32 [Radeon RX 7700 XT / 7800 XT]
-1002:7480|Navi 33 [Radeon RX 7600/7600 XT/7600M XT/7600S/7700S / PRO W7600]
-1002:7483|Navi 33 [Radeon RX 7600M/7600M XT]
 1002:7499|Navi 33 [Radeon RX 7400/7300/Pro W7400]
-1002:7550|Navi 48 [Radeon RX 9070/9070 XT/9070 GRE]
 1002:944a|RV770/M98L [Mobility Radeon HD 4850]
 1002:944b|RV770/M98 [Mobility Radeon HD 4850 X2]
 1002:945a|RV770/M98-XT [Mobility Radeon HD 4870]
