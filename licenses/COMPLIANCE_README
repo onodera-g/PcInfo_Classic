@@ -15,6 +15,8 @@ to travel with generated images:
   - COPYING.LGPL-2.1
   - COPYING.APACHE-2.0
   - COPYING.BSD-3-Clause
+  - COPYING.jq
+  - COPYING.oniguruma
   - NOTICE.APACHE-2.0
   - PATCHES/kexec-tools-binary-adjustment.txt
 

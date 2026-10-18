@@ -1,0 +1,12 @@
+# Windows専用ビルド環境。Linux側の診断アプリには同梱しない。
+appdirs==1.4.4
+fs==2.4.16
+pycdlib==1.14.0
+pyfatfs==1.1.0
+setuptools==80.9.0
+six==1.17.0
+# 実際のjq解析プログラムをWindows上で単体検証する（IMGへはAlpine版jqを同梱）。
+jq==1.12.0
+# Linuxシェルを起動せず、Windowsでシェル構文と操作の境界を検査する。
+tree-sitter==0.26.0
+tree-sitter-bash==0.25.1

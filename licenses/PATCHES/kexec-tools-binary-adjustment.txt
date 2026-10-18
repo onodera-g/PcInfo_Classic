@@ -10,13 +10,13 @@ Why it is adjusted:
   for memory range discovery on affected systems.
 
 Current implementation:
-  build/build_alpine.sh extracts kexec-tools into the overlay and then runs a
+  tools/build_windows.py extracts kexec-tools into the overlay and then runs a
   byte replacement on the installed binary:
 
     /sys/firmware/memmap -> /sys/firmware/NOSCAN
 
 Files involved:
-  - build/build_alpine.sh
+  - tools/build_windows.py
   - generated overlay path: /usr/sbin/kexec
 
 Corresponding-source implication:

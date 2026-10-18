@@ -1,16 +1,14 @@
 #!/bin/sh
-# menu_gpu.sh - GPU Driver Test
+# menu_gpu.sh - GPU Driver Check
 #
 # All GPU kernel modules (radeon, amdgpu, nouveau, i915) and their firmware
 # are shipped inside Alpine's modloop-lts and pre-loaded at boot via the
 # `modules=` kernel parameter and the radeon-specific quirks in cmdline
-# (radeon.dpm=0, radeon.audio=0 etc.) defined in build_alpine.sh. This menu
+# (radeon.dpm=0, radeon.audio=0 etc.) defined in tools/packaging/build_config.json. This menu
 # therefore only inspects the result.
 #
-# When the simple-framebuffer / efi-framebuffer platform driver still owns
-# the aperture (and the PCI GPU is therefore not bound to its real driver
-# yet), `recover_gpu_bindings` releases it and triggers a PCI re-probe so
-# the appropriate DRM driver can take over.
+# Inspection never changes drivers. Explicit recovery only loads modules;
+# it does not unbind a framebuffer or force a PCI reprobe.
 
 . /opt/pcinfo/common.sh
 
@@ -98,29 +96,6 @@ target_modules_for_device() {
     candidate_modules_for_vendor "$vendor"
 }
 
-# Unbind simpledrm/efi-framebuffer so the real GPU driver can claim the
-# aperture on rebind.
-release_simple_framebuffer() {
-    local entry=""
-    local sysfs_driver=""
-    local id=""
-
-    for entry in /sys/bus/platform/drivers/simple-framebuffer \
-                 /sys/bus/platform/drivers/efi-framebuffer; do
-        [ -d "$entry" ] || continue
-        for id in "$entry"/*; do
-            [ -L "$id" ] || continue
-            case "$(basename "$id")" in bind|unbind|uevent|module) continue ;; esac
-            printf '%s\n' "$(basename "$id")" > "$entry/unbind" 2>/dev/null || true
-        done
-    done
-
-    # /sys/class/drm/card0 may also be backed by simpledrm; that is removed
-    # automatically once the platform driver above is unbound.
-    sysfs_driver=$(readlink /sys/class/drm/card0/device/driver 2>/dev/null | xargs basename 2>/dev/null)
-    [ -n "$sysfs_driver" ] && printf '  simpledrm release attempted (was: %s)\n' "$sysfs_driver"
-}
-
 # Try to make the right kernel module bind to dev_path.
 attempt_module_bind() {
     local dev_path="$1"
@@ -157,18 +132,6 @@ attempt_module_bind() {
             return 0
         fi
 
-        # Free the simple/efi framebuffer that might still own the aperture,
-        # then ask the PCI core to (re-)probe this device.
-        release_simple_framebuffer
-        if [ -w /sys/bus/pci/drivers_probe ]; then
-            printf '%s\n' "$slot" > /sys/bus/pci/drivers_probe 2>/dev/null || true
-        fi
-        bound=$(bound_driver_for "$dev_path" 2>/dev/null || true)
-        if [ "$bound" = "$mod" ]; then
-            printf '  %s: bound to %s after rebind\n' "$slot" "$mod"
-            rm -f "$modprobe_err" 2>/dev/null || true
-            return 0
-        fi
         printf '  %s: %s loaded but did not bind\n' "$slot" "$mod"
     done
     rm -f "$modprobe_err" 2>/dev/null || true
@@ -199,34 +162,19 @@ show_dmesg_for_gpu() {
     printf '%s\n' "$matches" | sed 's/^/  /'
 }
 
-# Try to load missing modules and rebind unbound GPUs.
+# Explicit request only: load missing modules for GPUs that have no driver.
 recover_gpu_bindings() {
-    local dev driver vendor recovery_mode
+    local dev driver
     local gpu_detected=0
     local attempted_count=0
     local failed_count=0
-    recovery_mode="${PCINFO_GPU_RECOVERY_MODE:-safe}"
     for dev in $(detect_gpu_devices); do
         gpu_detected=1
         driver=$(bound_driver_for "$dev" 2>/dev/null || true)
-        if [ -n "$driver" ]; then
-            case "$recovery_mode" in
-                enforce)
-                    vendor=$(cat "$dev/vendor" 2>/dev/null)
-                    case "$vendor:$driver" in
-                        0x1002:amdgpu|0x1002:radeon|0x10de:nouveau|0x8086:i915)
-                            continue
-                            ;;
-                    esac
-                    ;;
-                *)
-                    continue
-                    ;;
-            esac
-        fi
+        [ -n "$driver" ] && continue
         if [ "$attempted_count" -eq 0 ]; then
             section "Recovery attempt"
-            printf "  mode: %s\n" "$recovery_mode"
+            printf "  Loading missing modules only; no forced framebuffer release.\n"
         fi
         attempted_count=$((attempted_count + 1))
         printf "  Trying %s ...\n" "$(basename "$dev")"
@@ -236,6 +184,7 @@ recover_gpu_bindings() {
     done
     RECOVERY_ATTEMPTED_COUNT="$attempted_count"
     if [ "$gpu_detected" -eq 0 ] || [ "$attempted_count" -eq 0 ]; then
+        printf "  No unbound GPU requires module loading.\n"
         return 0
     elif [ "$failed_count" -eq 0 ]; then
         printf "  ${GREEN}Recovery completed for %s GPU(s)${RESET}\n" "$attempted_count"
@@ -423,6 +372,7 @@ show_gpus() {
         group_title "GPU $gpu_count"
         if [ "$mode" = "summary" ]; then
             item "Model"  "$gpu_model"
+            item "Driver" "$driver_text"
         else
             item "Slot"     "$gpu_slot_label"
             item "Model"    "$gpu_model"
@@ -446,31 +396,37 @@ show_gpus() {
 }
 
 # ----- Main -----
-printf '\033[2J\033[H' > "$TTY" 2>/dev/null
-{
-    printf "\n${BOLD}${CYAN}[GPU Test]${RESET}\n\n"
-    printf "  Inspecting GPU driver state...\n\n"
-
+show_driver_check() {
+    printf "\n${BOLD}${CYAN}[GPU Driver Check]${RESET}\n\n"
+    printf "  Inspecting GPU driver state. No load or VRAM stress test.\n\n"
     show_gpus summary
     if [ "${SHOW_GPUS_LAST_COUNT:-0}" -gt 0 ]; then
-        recover_gpu_bindings
-        if [ "${RECOVERY_ATTEMPTED_COUNT:-0}" -gt 0 ]; then
-            printf "\n"
-            show_gpus full 1
-        fi
         show_dri_devices
-        if [ "${RECOVERY_ATTEMPTED_COUNT:-0}" -gt 0 ] || [ "${SHOW_DRI_WARN_COUNT:-0}" -gt 0 ]; then
+        if [ "${SHOW_DRI_WARN_COUNT:-0}" -gt 0 ]; then
             show_cmdline_and_modules
             show_framebuffer
             show_dmesg_for_gpu
         fi
     fi
+}
 
-    printf "\n"
-} > "$TTY" 2>&1
-
-{
-    printf "\n${SEP}\nPress any key to return\n"
-} > "$TTY"
-wait_any_key
+if ! action=$(show_driver_check 2>&1 | show_paged_blocks gpu); then
+    exit 1
+fi
+while true; do
+    case "$action" in
+        q|Q) break ;;
+        r|R)
+            if ! action=$({
+                printf "\n${BOLD}${CYAN}[GPU Driver Check]${RESET}\n\n"
+                recover_gpu_bindings
+                show_gpus full 1
+                show_dri_devices
+            } 2>&1 | show_paged_blocks gpu); then
+                exit 1
+            fi
+            ;;
+        *) break ;;
+    esac
+done
 exit 0

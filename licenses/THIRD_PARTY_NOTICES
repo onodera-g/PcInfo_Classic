@@ -1,18 +1,22 @@
 PCInfo Classic bundles and redistributes third-party software and data when
 building the bootable image. This file summarizes the main third-party
-components that are included by build/build_alpine.sh.
+components that are included by tools/build_windows.py.
 
-Project license
+Project licenses
 ---------------
-The original project files in this repository are licensed under the MIT
-License. See the root LICENSE file.
+The original diagnostic scripts are licensed under the MIT License.
+See the root LICENSE file. The Windows build version comparator,
+tools/pcinfo_build/versions.py, is adapted from Alpine apk-tools v2.14.6
+src/version.c and is GPL-2.0-only; its copyright notices are preserved in
+that file. See COPYING.GPL-2.0 and the upstream source at
+https://github.com/alpinelinux/apk-tools/blob/v2.14.6/src/version.c .
 
 Bundled third-party components
 ------------------------------
 1. Alpine Linux packages
    - Source: Alpine Linux 3.21 standard image and official main/community
      repositories.
-   - Build logic: build/build_alpine.sh downloads the Alpine standard image,
+   - Build logic: tools/build_windows.py downloads the Alpine standard image,
      extracts base packages, and adds extra APK packages to the generated
      image.
    - License: varies by package. The generated image includes packages under
@@ -26,29 +30,48 @@ Bundled third-party components
 2. Memtest86+
    - Source: memtest.org binary release and Debian memtest86+ package used as
      a fallback source for the bzImage payload.
-   - Build logic: build/build_alpine.sh downloads and redistributes
+   - Build logic: tools/build_windows.py downloads and redistributes
      memtest.efi and memtest.bin in the generated image.
    - License: GPL-2.0-only according to upstream Memtest86+ documentation.
 
 3. pci.ids
    - Source: PCI ID Project (https://pci-ids.ucw.cz/).
-   - Build logic: build/build_alpine.sh downloads pci.ids and copies it into
+   - Build logic: tools/build_windows.py downloads pci.ids and copies it into
      the generated image.
    - License: pci.ids states that it may be distributed under either
      GPL-2.0-or-later or BSD-3-Clause.
+
+4. GNU GRUB
+   - Source: official GNU Windows image-generation tools and same-version
+     target modules from Alpine's official grub-bios/grub-efi packages.
+   - Build logic: tools/build_windows.py uses grub-mkimage.exe to generate
+     BIOS and x86_64 EFI boot images. Versions are selected explicitly in
+     tools/packaging/build_config.json and recorded in BOOT_COMPONENTS.txt.
+   - License: GPL-3.0-or-later. See COPYING.GPL-3.0.
+   - Corresponding source: https://ftp.gnu.org/gnu/grub/ .
+   - Syslinux is no longer included by the Windows build.
+
+5. jq and Oniguruma
+   - Source: official Alpine jq and oniguruma packages, with metadata recorded
+     in the generated BUNDLED_PACKAGES.tsv and SOURCE_LOCATIONS.
+   - Purpose: parse smartctl JSON and associate AMD CU logs with their GPU.
+   - Upstream: https://github.com/jqlang/jq and https://github.com/kkos/oniguruma .
+   - Notices: COPYING.jq and COPYING.oniguruma preserve upstream notices.
+   - Python jq and Tree-sitter packages are Windows development/test tools;
+     the Python environment is not included in the generated image.
 
 Modified third-party component
 ------------------------------
 kexec-tools is redistributed from the Alpine package set, and the extracted
 kexec binary is modified during the build to replace /sys/firmware/memmap with
 /sys/firmware/NOSCAN before the image is packaged. The modification logic is
-implemented in build/build_alpine.sh.
+implemented in tools/build_windows.py.
 
 For redistributors of generated images, the corresponding source for this
 modified kexec-tools component should be treated as including:
   - the upstream kexec-tools source for the redistributed version,
   - the Alpine packaging metadata for the redistributed package version, and
-  - the modification logic in build/build_alpine.sh used to alter the binary
+  - the modification logic in tools/build_windows.py used to alter the binary
     before redistribution.
 
 Redistribution note

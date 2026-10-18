@@ -3,6 +3,26 @@
 
 . /opt/pcinfo/common.sh
 
+ensure_setup_ready() {
+    local reason=""
+    while [ "$(cat "$BOOT_STATUS_FILE" 2>/dev/null)" != ready ]; do
+        reason=$(cat "$BOOT_STATUS_FILE" 2>/dev/null) || reason='Startup setup did not complete.'
+        [ -n "$reason" ] || reason='Startup setup did not complete.'
+        {
+            printf '\033[2J\033[H\n[Startup setup failed]\n\n'
+            printf '%s\n\n' "$reason"
+            printf 'r: Retry setup   q: Shutdown\n'
+        } > "$TTY"
+        read_key || return 1
+        case "$key" in
+            r|R) /etc/local.d/00-pcinfo-setup.start > "$TTY" 2>&1 ;;
+            q|Q) poweroff; return 1 ;;
+        esac
+    done
+}
+
+ensure_setup_ready || exit 1
+
 show_menu() {
     printf '\033[2J\033[H' > "$TTY" 2>/dev/null
     printf ' ____      ___        __          ____ _               _      \n' > "$TTY"
@@ -16,7 +36,7 @@ show_menu() {
     printf '\n' > "$TTY"
     printf '  2.  Memory Test\n' > "$TTY"
     printf '\n' > "$TTY"
-    printf '  3.  GPU Test\n' > "$TTY"
+    printf '  3.  GPU Driver Check\n' > "$TTY"
     printf '\n' > "$TTY"
     printf '  4.  Storage Health\n' > "$TTY"
     printf '\n' > "$TTY"
@@ -26,7 +46,7 @@ show_menu() {
 
 while true; do
     show_menu
-    read_key
+    read_key || exit 1
 
     case "$key" in
         1) /opt/pcinfo/menu_pcinfo.sh ;;

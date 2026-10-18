@@ -1,26 +1,12 @@
-# Build artifacts (work dirs, not committed)
-build/work/
-build/work_alpine/
-build/drivers/
-build/backup/
-work_alpine/
-
-# Build output: .img is large (tracked separately or excluded)
-build/pcinfo-classic.img
-
-# Logs / temp
-wget-log*
-test.txt
+# プロジェクト内の開発環境・再生成物
+/.venv/
+/.cache/
+/build/
+/export/
+__pycache__/
+*.py[cod]
 *.log
-メモ.txt
-gpu_ambiguous_target_entries.txt
-
-# Screenshots
-*.png
 
 # OS
 .DS_Store
 Thumbs.db
-
-.devcontainer/*
-.github/*

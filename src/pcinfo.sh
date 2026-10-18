@@ -2,6 +2,7 @@
 # pcinfo.sh - PC Information Collector (Alpine Linux / BusyBox compatible)
 
 . /opt/pcinfo/common.sh
+. /opt/pcinfo/lib/hardware.sh
 
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -209,96 +210,10 @@ first_cpuinfo_value() {
     ' /proc/cpuinfo 2>/dev/null
 }
 
-first_lscpu_value() {
-    command -v lscpu >/dev/null 2>&1 || return 1
-    lscpu 2>/dev/null | awk -F ':' -v key="$1" '
-        {
-            field=$1
-            sub(/^[[:space:]]+/, "", field)
-            sub(/[[:space:]]+$/, "", field)
-        }
-        field == key {
-            value=substr($0, index($0, ":") + 1)
-            sub(/^[[:space:]]+/, "", value)
-            print value
-            exit
-        }
-    '
-}
-
-first_dmidecode_processor_value() {
-    command -v dmidecode >/dev/null 2>&1 || return 1
-    dmidecode -t 4 2>/dev/null | awk -F ':' -v key="$1" '
-        BEGIN { in_block=0 }
-        /^Processor Information$/ { in_block=1; next }
-        /^Handle / {
-            if (in_block) exit
-            next
-        }
-        in_block {
-            field=$1
-            sub(/^[[:space:]]+/, "", field)
-            sub(/[[:space:]]+$/, "", field)
-            if (field == key) {
-                value=substr($0, index($0, ":") + 1)
-                sub(/^[[:space:]]+/, "", value)
-                print value
-                exit
-            }
-        }
-    '
-}
-
-first_dmidecode_baseboard_value() {
-    command -v dmidecode >/dev/null 2>&1 || return 1
-    dmidecode -t 2 2>/dev/null | awk -F ':' -v key="$1" '
-        BEGIN { in_block=0 }
-        /^Base Board Information$/ { in_block=1; next }
-        /^Handle / {
-            if (in_block) exit
-            next
-        }
-        in_block {
-            field=$1
-            sub(/^[[:space:]]+/, "", field)
-            sub(/[[:space:]]+$/, "", field)
-            if (field == key) {
-                value=substr($0, index($0, ":") + 1)
-                sub(/^[[:space:]]+/, "", value)
-                print value
-                exit
-            }
-        }
-    '
-}
-
-first_dmidecode_bios_value() {
-    command -v dmidecode >/dev/null 2>&1 || return 1
-    dmidecode -t 0 2>/dev/null | awk -F ':' -v key="$1" '
-        BEGIN { in_block=0 }
-        /^BIOS Information$/ { in_block=1; next }
-        /^Handle / {
-            if (in_block) exit
-            next
-        }
-        in_block {
-            field=$1
-            sub(/^[[:space:]]+/, "", field)
-            sub(/[[:space:]]+$/, "", field)
-            if (field == key) {
-                value=substr($0, index($0, ":") + 1)
-                sub(/^[[:space:]]+/, "", value)
-                print value
-                exit
-            }
-        }
-    '
-}
-
 get_motherboard_model() {
     local manufacturer="" product="" value=""
-    manufacturer=$(first_dmidecode_baseboard_value "Manufacturer")
-    product=$(first_dmidecode_baseboard_value "Product Name")
+    manufacturer=$(first_dmidecode_value 2 "Manufacturer")
+    product=$(first_dmidecode_value 2 "Product Name")
     case "$manufacturer" in
         ''|'Not Specified'|'Unknown'|'To Be Filled By O.E.M.') manufacturer="" ;;
     esac
@@ -312,7 +227,7 @@ get_motherboard_model() {
 
 get_bios_version() {
     local value=""
-    value=$(first_dmidecode_bios_value "Version")
+    value=$(first_dmidecode_value 0 "Version")
     case "$value" in
         ''|'Not Specified'|'Unknown') value="" ;;
     esac
@@ -322,7 +237,7 @@ get_bios_version() {
 
 get_bios_release_date() {
     local value=""
-    value=$(first_dmidecode_bios_value "Release Date")
+    value=$(first_dmidecode_value 0 "Release Date")
     case "$value" in
         ''|'Not Specified'|'Unknown') value="" ;;
     esac
@@ -335,7 +250,7 @@ get_cpu_model_name() {
 
     value=$(first_lscpu_value "Model name")
     [ -n "$value" ] || value=$(first_cpuinfo_value "model name")
-    [ -n "$value" ] || value=$(first_dmidecode_processor_value "Version")
+    [ -n "$value" ] || value=$(first_dmidecode_value 4 "Version")
     [ -n "$value" ] || value=$(first_cpuinfo_value "Hardware")
     [ -n "$value" ] || value=$(first_cpuinfo_value "Processor")
     [ -n "$value" ] || value=$(uname -m 2>/dev/null)
@@ -347,7 +262,7 @@ get_cpu_thread_count() {
     local value=""
 
     value=$(first_lscpu_value "CPU(s)")
-    [ -n "$value" ] || value=$(first_dmidecode_processor_value "Thread Count")
+    [ -n "$value" ] || value=$(first_dmidecode_value 4 "Thread Count")
     [ -n "$value" ] || value=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
     [ -n "$value" ] || value="1"
 
@@ -367,7 +282,7 @@ get_cpu_core_count() {
     esac
 
     [ -n "$value" ] || value=$(first_lscpu_value "Core(s) per cluster")
-    [ -n "$value" ] || value=$(first_dmidecode_processor_value "Core Count")
+    [ -n "$value" ] || value=$(first_dmidecode_value 4 "Core Count")
     [ -n "$value" ] || value=$(first_cpuinfo_value "cpu cores")
     [ -n "$value" ] || value=$(get_cpu_thread_count)
 
@@ -608,107 +523,6 @@ get_total_memory_capacity() {
     esac
 }
 
-get_block_device_size() {
-    local dev_name="$1"
-    local sectors=""
-
-    [ -r "/sys/class/block/$dev_name/size" ] || return 1
-    sectors=$(cat "/sys/class/block/$dev_name/size" 2>/dev/null)
-    case "$sectors" in
-        ''|*[!0-9]*) return 1 ;;
-    esac
-    echo $((sectors * 512))
-}
-
-get_block_device_model() {
-    local dev_name="$1"
-    local value=""
-
-    for value in \
-        "/sys/class/block/$dev_name/device/model" \
-        "/sys/class/block/$dev_name/device/name"; do
-        [ -r "$value" ] || continue
-        value=$(tr -d '\n' < "$value" 2>/dev/null)
-        value=$(trim_value "$value")
-        [ -n "$value" ] && {
-            printf '%s\n' "$value"
-            return 0
-        }
-    done
-
-    return 1
-}
-
-get_block_device_interface() {
-    local dev_name="$1"
-    local sys_path=""
-
-    sys_path=$(readlink -f "/sys/class/block/$dev_name/device" 2>/dev/null)
-    case "$sys_path" in
-        *"/nvme/"*) echo "NVMe" ;;
-        *"/usb"*)   echo "USB" ;;
-        *"/ata"*)   echo "SATA" ;;
-        *"/sas/"*)  echo "SAS" ;;
-        *"/mmc"*)   echo "MMC" ;;
-        *"/virtio"*) echo "VirtIO" ;;
-        *"/pci"*)   echo "PCIe" ;;
-        *)          echo "Unknown" ;;
-    esac
-}
-
-storage_transport_name() {
-    case "$1" in
-        nvme) echo "NVMe" ;;
-        sata) echo "SATA" ;;
-        ata)  echo "SATA" ;;
-        usb)  echo "USB" ;;
-        sas)  echo "SAS" ;;
-        spi)  echo "SPI" ;;
-        mmc)  echo "MMC" ;;
-        pci)  echo "PCIe" ;;
-        *)    [ -n "$1" ] && printf '%s\n' "$1" || echo "Unknown" ;;
-    esac
-}
-
-lsblk_pair_value() {
-    local line="$1"
-    local key="$2"
-
-    printf '%s\n' "$line" | awk -v key="$key" '
-        {
-            pattern = key "=\""
-            pos = index($0, pattern)
-            if (pos == 0) {
-                exit
-            }
-            start = pos + length(pattern)
-            rest = substr($0, start)
-            end = index(rest, "\"")
-            if (end == 0) {
-                print rest
-            } else {
-                print substr(rest, 1, end - 1)
-            }
-        }
-    '
-}
-
-list_storage_block_devices() {
-    local sys_dev=""
-    local dev_name=""
-    local dev_path=""
-
-    for sys_dev in /sys/class/block/*; do
-        [ -e "$sys_dev" ] || continue
-        dev_name=$(basename "$sys_dev")
-        printf '%s\n' "$dev_name" | grep -Eq '^(sd[a-z]+|nvme[0-9]+n[0-9]+|mmcblk[0-9]+|vd[a-z]+|xvd[a-z]+)$' || continue
-        [ -f "$sys_dev/partition" ] && continue
-        dev_path="/dev/$dev_name"
-        [ -b "$dev_path" ] || continue
-        printf '%s\n' "$dev_path"
-    done
-}
-
 render_storage_entry() {
     local storage_index="$1"
     local storage_total="$2"
@@ -734,6 +548,7 @@ render_storage_entry() {
 # ============================================================
 # CPU
 # ============================================================
+collect_hardware_snapshot
 section "CPU"
 
 item "Model" "$(get_cpu_model_name)"
@@ -810,7 +625,7 @@ for dev in /sys/bus/pci/devices/*; do
     dev_id=$(cat "$dev/device" 2>/dev/null)
     subsystem_vendor=$(cat "$dev/subsystem_vendor" 2>/dev/null)
     subsystem_device=$(cat "$dev/subsystem_device" 2>/dev/null)
-    slot=$(basename "$dev" | sed 's/^0000://')
+    slot=$(basename "$dev")
 
     vname=$(get_pci_vendor_name "$vendor")
     gpu_model=$(get_pci_gpu_model "$slot" "$vendor" "$dev_id" "$vname" "$subsystem_vendor" "$subsystem_device")
@@ -818,10 +633,10 @@ for dev in /sys/bus/pci/devices/*; do
     drv=""
     [ -L "$dev/driver" ] && drv=$(basename "$(readlink "$dev/driver" 2>/dev/null)")
     [ -z "$drv" ] && drv="none"
-    gpu_vram=$(get_pci_gpu_vram "$dev" "0000:$slot" "$vendor" "$dev_id" "$drv" "$subsystem_vendor" "$subsystem_device")
-    gpu_subsys=$(get_pci_subsystem_display_text "0000:$slot" "$subsystem_vendor" "$subsystem_device")
-    gpu_slot_label=$(get_pci_slot_label "$dev" "0000:$slot")
-    gpu_link_width=$(get_pci_link_width "$dev" "0000:$slot")
+    gpu_vram=$(get_pci_gpu_vram "$dev" "$slot" "$vendor" "$dev_id" "$drv" "$subsystem_vendor" "$subsystem_device")
+    gpu_subsys=$(get_pci_subsystem_display_text "$slot" "$subsystem_vendor" "$subsystem_device")
+    gpu_slot_label=$(get_pci_slot_label "$dev" "$slot")
+    gpu_link_width=$(get_pci_link_width "$dev" "$slot")
     [ "$gpu_count" -gt 1 ] && printf '\n'
     if [ "$gpu_total" -gt 1 ]; then
         indented_group_title "GPU $gpu_count"
@@ -849,66 +664,15 @@ section "Storage"
 
 if command -v lsblk > /dev/null 2>&1; then
     storage_index=0
-    storage_lines=""
-    storage_lines=$(lsblk -d -b -J -o NAME,MODEL,SIZE,TRAN,TYPE 2>/dev/null | awk '
-        BEGIN { RS = "}" }
-        function trim(s) {
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
-            return s
-        }
-        function json_val(src, key,    token, pos, rest, ch, out, i) {
-            token = "\"" key "\""
-            pos = index(src, token)
-            if (!pos) return ""
-            rest = substr(src, pos + length(token))
-            pos = index(rest, ":")
-            if (!pos) return ""
-            rest = trim(substr(rest, pos + 1))
-            ch = substr(rest, 1, 1)
-            if (ch == "\"") {
-                rest = substr(rest, 2)
-                pos = index(rest, "\"")
-                if (!pos) return ""
-                return substr(rest, 1, pos - 1)
-            }
-            out = ""
-            for (i = 1; i <= length(rest); i++) {
-                ch = substr(rest, i, 1)
-                if (ch ~ /[0-9]/) {
-                    out = out ch
-                } else if (length(out) > 0) {
-                    break
-                }
-            }
-            return out
-        }
-        /"name"[[:space:]]*:/ {
-            name = json_val($0, "name")
-            model = json_val($0, "model")
-            size = json_val($0, "size")
-            tran = json_val($0, "tran")
-            type = json_val($0, "type")
-            if (name != "" && type != "") {
-                printf "NAME=\"%s\" MODEL=\"%s\" SIZE=\"%s\" TRAN=\"%s\" TYPE=\"%s\"\n", name, model, size, tran, type
-            }
-        }
-    ')
-    [ -n "$storage_lines" ] || storage_lines=$(lsblk -d -b -P -o NAME,MODEL,SIZE,TRAN,TYPE 2>/dev/null)
-    storage_total=$(printf '%s\n' "$storage_lines" | awk '
-        match($0, /TYPE="[^"]*"/) {
-            type = substr($0, RSTART + 6, RLENGTH - 7)
-            if (type == "disk") {
-                count++
-            }
-        }
-        END { print count + 0 }
-    ')
+    collect_storage_records
+    storage_lines="$STORAGE_RECORDS"
+    storage_total=$(printf '%s\n' "$storage_lines" | count_storage_records)
     printf '%s\n' "$storage_lines" | while IFS= read -r line; do
-        name=$(lsblk_pair_value "$line" "NAME")
-        model=$(lsblk_pair_value "$line" "MODEL")
-        size=$(lsblk_pair_value "$line" "SIZE")
-        tran=$(lsblk_pair_value "$line" "TRAN")
-        dtype=$(lsblk_pair_value "$line" "TYPE")
+        name=$(storage_record_value "$line" "name")
+        model=$(storage_record_value "$line" "model")
+        size=$(storage_record_value "$line" "size")
+        tran=$(storage_record_value "$line" "tran")
+        dtype=$(storage_record_value "$line" "type")
         [ "$dtype" = "disk" ] || continue
         [ -n "$name" ] || continue
         storage_index=$((storage_index + 1))

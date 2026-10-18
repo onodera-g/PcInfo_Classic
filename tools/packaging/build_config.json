@@ -1,0 +1,22 @@
+{
+  "alpine_version": "3.21.8",
+  "architecture": "x86_64",
+  "alpine_mirror": "https://dl-cdn.alpinelinux.org/alpine",
+  "grub_version": "2.14",
+  "grub_repository_branch": "3.24",
+  "grub_sha256": "243b2130cf93c3167822da3c6043324d0d5bf4e107c610ead4637d245f2abe2b",
+  "memtest_version": "8.00",
+  "minimum_image_mb": 512,
+  "volume_label": "PCINFO",
+  "packages": [
+    "alpine-base", "bash", "dialog", "smartmontools", "nvme-cli", "pciutils",
+    "hdparm", "util-linux", "blkid", "dmidecode", "eudev", "kmod",
+    "json-c", "libnvme", "libstdc++", "libgcc", "kexec-tools", "xz-libs", "zstd-libs", "jq"
+  ],
+  "overlay_packages": [
+    "dmidecode", "libgcc", "libstdc++", "smartmontools", "json-c", "libnvme", "nvme-cli",
+    "libcrypto3", "xz-libs", "zlib", "zstd-libs", "kmod", "util-linux", "kexec-tools", "jq"
+  ],
+  "boot_modules": "loop,squashfs,sd-mod,usb-storage,vfat,fat,nls_cp437,nls_iso8859-1,fbcon,drm,drm_kms_helper,ttm,radeon,amdgpu,nouveau,i915",
+  "kernel_parameters": "radeon.modeset=1 radeon.dpm=0 radeon.aspm=0 radeon.audio=0 radeon.hw_i2c=1 radeon.no_wb=1 radeon.tv=0 nouveau.modeset=1 i915.modeset=1 fbcon=map:0 video=DVI-I-1:1920x1080@60 video=DVI-I-2:1920x1080@60 video=DVI-I-3:1920x1080@60 video=DVI-D-1:1920x1080@60 video=DVI-D-2:1920x1080@60 video=DVI-D-3:1920x1080@60 video=DVI-A-1:1920x1080@60"
+}

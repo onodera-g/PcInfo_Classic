@@ -25,7 +25,7 @@ corresponding source should be treated as including:
   - the Alpine packaging metadata for that redistributed version, and
   - the local modification process described in
     PATCHES/kexec-tools-binary-adjustment.txt and implemented in
-    build/build_alpine.sh.
+    tools/build_windows.py.
 
 This file is a compliance aid and not legal advice. Redistributors remain
 responsible for ensuring that the offered source exactly matches the binaries

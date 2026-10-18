@@ -1,0 +1,603 @@
+{
+  "smart": [
+    {
+      "name": "ata_good",
+      "exit": 0,
+      "input": {
+        "smart_status": {
+          "passed": true
+        },
+        "model_name": "Sample SSD",
+        "ata_smart_attributes": {
+          "table": [
+            {
+              "id": 233,
+              "name": "Media_Wearout_Indicator",
+              "value": 93,
+              "raw": {
+                "value": 0
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "health_status": "Good",
+        "remaining_percent": 93
+      }
+    },
+    {
+      "name": "scsi_failure_prediction",
+      "exit": 8,
+      "input": {
+        "smart_status": {
+          "passed": false,
+          "scsi": {
+            "ie_string": "Failure prediction threshold exceeded"
+          }
+        }
+      },
+      "expected": {
+        "health_status": "Bad"
+      }
+    },
+    {
+      "name": "scsi_good",
+      "exit": 0,
+      "input": {
+        "smart_status": {
+          "passed": true
+        }
+      },
+      "expected": {
+        "health_status": "Good"
+      }
+    },
+    {
+      "name": "no_overall_check",
+      "exit": 0,
+      "input": {
+        "ata_smart_attributes": {
+          "table": [
+            {
+              "id": 5,
+              "raw": {
+                "value": 0
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "health_status": "Unknown"
+      }
+    },
+    {
+      "name": "device_open_failed",
+      "exit": 2,
+      "input": {
+        "smartctl": {
+          "exit_status": 2
+        }
+      },
+      "expected": {
+        "health_status": "Unknown"
+      }
+    },
+    {
+      "name": "partial_data",
+      "exit": 4,
+      "input": {
+        "smart_status": {
+          "passed": true
+        },
+        "smartctl": {
+          "exit_status": 4
+        }
+      },
+      "expected": {
+        "health_status": "Unknown"
+      }
+    },
+    {
+      "name": "process_error_cannot_be_hidden_by_json",
+      "exit": 4,
+      "input": {
+        "smart_status": {
+          "passed": true
+        },
+        "smartctl": {
+          "exit_status": 0
+        }
+      },
+      "expected": {
+        "health_status": "Unknown"
+      }
+    },
+    {
+      "name": "json_error_cannot_be_hidden_by_process",
+      "exit": 0,
+      "input": {
+        "smart_status": {
+          "passed": true
+        },
+        "smartctl": {
+          "exit_status": 4
+        }
+      },
+      "expected": {
+        "health_status": "Unknown"
+      }
+    },
+    {
+      "name": "confirmed_failure_with_partial_data",
+      "exit": 12,
+      "input": {
+        "smart_status": {
+          "passed": false
+        }
+      },
+      "expected": {
+        "health_status": "Bad"
+      }
+    },
+    {
+      "name": "pending_sectors",
+      "exit": 0,
+      "input": {
+        "smart_status": {
+          "passed": true
+        },
+        "ata_smart_attributes": {
+          "table": [
+            {
+              "id": 197,
+              "raw": {
+                "value": 2
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "health_status": "Caution",
+        "pending": 2
+      }
+    },
+    {
+      "name": "reported_uncorrectable",
+      "exit": 0,
+      "input": {
+        "smart_status": {
+          "passed": true
+        },
+        "ata_smart_attributes": {
+          "table": [
+            {
+              "id": 187,
+              "raw": {
+                "value": 1
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "health_status": "Bad"
+      }
+    },
+    {
+      "name": "prefail_exit",
+      "exit": 16,
+      "input": {
+        "smart_status": {
+          "passed": true
+        }
+      },
+      "expected": {
+        "health_status": "Bad"
+      }
+    },
+    {
+      "name": "error_log_exit",
+      "exit": 64,
+      "input": {
+        "smart_status": {
+          "passed": true
+        }
+      },
+      "expected": {
+        "health_status": "Caution"
+      }
+    },
+    {
+      "name": "selftest_exit",
+      "exit": 128,
+      "input": {
+        "smart_status": {
+          "passed": true
+        }
+      },
+      "expected": {
+        "health_status": "Caution"
+      }
+    },
+    {
+      "name": "nvme_good",
+      "exit": 0,
+      "input": {
+        "smart_status": {
+          "passed": true
+        },
+        "nvme_smart_health_information_log": {
+          "critical_warning": 0,
+          "percentage_used": 7,
+          "data_units_written": 1000,
+          "media_errors": 0
+        }
+      },
+      "expected": {
+        "health_status": "Good",
+        "remaining_percent": 93,
+        "total_host_writes_bytes": 512000000
+      }
+    },
+    {
+      "name": "nvme_critical_warning",
+      "exit": 0,
+      "input": {
+        "smart_status": {
+          "passed": true
+        },
+        "nvme_smart_health_information_log": {
+          "critical_warning": 1
+        }
+      },
+      "expected": {
+        "health_status": "Bad"
+      }
+    },
+    {
+      "name": "nvme_media_errors",
+      "exit": 0,
+      "input": {
+        "smart_status": {
+          "passed": true
+        },
+        "nvme_smart_health_information_log": {
+          "media_errors": 1
+        }
+      },
+      "expected": {
+        "health_status": "Caution"
+      }
+    },
+    {
+      "name": "nvme_worn_out",
+      "exit": 0,
+      "input": {
+        "smart_status": {
+          "passed": true
+        },
+        "nvme_smart_health_information_log": {
+          "percentage_used": 120
+        }
+      },
+      "expected": {
+        "health_status": "Bad",
+        "remaining_percent": 0
+      }
+    },
+    {
+      "name": "low_remaining",
+      "exit": 0,
+      "input": {
+        "smart_status": {
+          "passed": true
+        },
+        "nvme_smart_health_information_log": {
+          "percentage_used": 95
+        }
+      },
+      "expected": {
+        "health_status": "Caution",
+        "remaining_percent": 5
+      }
+    },
+    {
+      "name": "ambiguous_vendor_attributes_are_not_lifetime",
+      "exit": 0,
+      "input": {
+        "smart_status": {
+          "passed": true
+        },
+        "ata_smart_attributes": {
+          "table": [
+            {
+              "id": 177,
+              "name": "Wear_Leveling_Count",
+              "value": 5,
+              "raw": {
+                "value": 500
+              }
+            },
+            {
+              "id": 232,
+              "name": "Available_Reserved_Space",
+              "value": 90
+            }
+          ]
+        }
+      },
+      "expected": {
+        "health_status": "Good",
+        "remaining_percent": null
+      }
+    },
+    {
+      "name": "rated_used_takes_raw_not_normalized",
+      "exit": 0,
+      "input": {
+        "smart_status": {
+          "passed": true
+        },
+        "ata_smart_attributes": {
+          "table": [
+            {
+              "id": 202,
+              "name": "Perc_Rated_Life_Used",
+              "value": 100,
+              "raw": {
+                "value": 8
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "health_status": "Good",
+        "remaining_percent": 92
+      }
+    },
+    {
+      "name": "malformed_passed_is_unknown",
+      "exit": 0,
+      "input": {
+        "smart_status": {
+          "passed": "true"
+        }
+      },
+      "expected": {
+        "health_status": "Unknown"
+      }
+    },
+    {
+      "name": "ata_metadata",
+      "exit": 0,
+      "input": {
+        "smart_status": {
+          "passed": true
+        },
+        "temperature": {
+          "current": 35
+        },
+        "power_cycle_count": 7,
+        "power_on_time": {
+          "hours": 123
+        },
+        "ata_smart_attributes": {
+          "table": [
+            {
+              "id": 241,
+              "name": "Total_LBAs_Written",
+              "raw": {
+                "value": 10000
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "health_status": "Good",
+        "temperature": 35,
+        "power_cycles": 7,
+        "power_on_hours": 123,
+        "total_host_writes_bytes": 5120000
+      }
+    }
+  ],
+  "gpu": [
+    {
+      "name": "pci_first_gpu",
+      "pci": "0000:01:00.0",
+      "card": "card2",
+      "single": "0",
+      "log": "amdgpu 0000:01:00.0: active_cu_number 36\namdgpu 0000:02:00.0: active_cu_number 64\n",
+      "expected": 36
+    },
+    {
+      "name": "pci_second_gpu",
+      "pci": "0000:02:00.0",
+      "card": "card0",
+      "single": "0",
+      "log": "amdgpu 0000:01:00.0: active_cu_number 36\namdgpu 0000:02:00.0: active_cu_number 64\n",
+      "expected": 64
+    },
+    {
+      "name": "actual_drm_card",
+      "pci": "0000:01:00.0",
+      "card": "card2",
+      "single": "0",
+      "log": "amdgpu card2 active_cu_number 36\namdgpu card0 active_cu_number 64\n",
+      "expected": 36
+    },
+    {
+      "name": "card1_is_not_card10",
+      "pci": "0000:01:00.0",
+      "card": "card1",
+      "single": "0",
+      "log": "amdgpu card10 active_cu_number 64\namdgpu card1 active_cu_number 36\n",
+      "expected": 36
+    },
+    {
+      "name": "nonzero_pci_domain",
+      "pci": "0001:01:00.0",
+      "card": "",
+      "single": "0",
+      "log": "amdgpu 0001:01:00.0: active_cu_number 56\namdgpu 0000:01:00.0: active_cu_number 64\n",
+      "expected": 56
+    },
+    {
+      "name": "legacy_single_gpu_active_cu",
+      "pci": "0000:01:00.0",
+      "card": "",
+      "single": "1",
+      "log": "amdgpu: active_cu_number 40\n",
+      "expected": 40
+    },
+    {
+      "name": "legacy_single_gpu_cu_per_sh",
+      "pci": "0000:01:00.0",
+      "card": "",
+      "single": "1",
+      "log": "amdgpu: 36 CU per SH\n",
+      "expected": 36
+    },
+    {
+      "name": "ambiguous_multi_gpu_keeps_candidates",
+      "pci": "0000:01:00.0",
+      "card": "",
+      "single": "0",
+      "log": "amdgpu: active_cu_number 64\n",
+      "expected": null
+    },
+    {
+      "name": "another_pci_cannot_override_single",
+      "pci": "0000:01:00.0",
+      "card": "",
+      "single": "1",
+      "log": "amdgpu 0000:02:00.0: active_cu_number 64\n",
+      "expected": null
+    },
+    {
+      "name": "short_pci",
+      "pci": "0000:01:00.0",
+      "card": "",
+      "single": "0",
+      "log": "amdgpu 01:00.0: active_cu_number 40\n",
+      "expected": 40
+    },
+    {
+      "name": "specific_source_preferred",
+      "pci": "0000:01:00.0",
+      "card": "card2",
+      "single": "1",
+      "log": "amdgpu 0000:01:00.0: active_cu_number 36\namdgpu: active_cu_number 64\n",
+      "expected": 36
+    },
+    {
+      "name": "full_active_count_before_per_sh",
+      "pci": "0000:01:00.0",
+      "card": "",
+      "single": "1",
+      "log": "amdgpu 0000:01:00.0: 16 CU per SH\namdgpu: active_cu_number 64\n",
+      "expected": 64
+    },
+    {
+      "name": "zero_does_not_erase_valid_count",
+      "pci": "0000:01:00.0",
+      "card": "",
+      "single": "1",
+      "log": "amdgpu: active_cu_number 36\namdgpu: active_cu_number 0\n",
+      "expected": 36
+    },
+    {
+      "name": "latest_for_same_gpu",
+      "pci": "0000:01:00.0",
+      "card": "",
+      "single": "0",
+      "log": "amdgpu 0000:01:00.0: active_cu_number 32\namdgpu 0000:01:00.0: active_cu_number 36\n",
+      "expected": 36
+    }
+  ],
+  "vram": [
+    {
+      "name": "two_gpu_different_capacity",
+      "pci": "0000:01:00.0",
+      "card": "card2",
+      "single": "0",
+      "log": "amdgpu 0000:01:00.0: VRAM: 8192M\namdgpu 0000:02:00.0: VRAM: 4096M\n",
+      "expected": [
+        "amdgpu 0000:01:00.0: VRAM: 8192M"
+      ]
+    },
+    {
+      "name": "real_card_mapping",
+      "pci": "0000:01:00.0",
+      "card": "card2",
+      "single": "0",
+      "log": "amdgpu card2: VRAM: 8192M\namdgpu card0: VRAM: 4096M\n",
+      "expected": [
+        "amdgpu card2: VRAM: 8192M"
+      ]
+    },
+    {
+      "name": "nouveau_legacy_single",
+      "pci": "0000:01:00.0",
+      "card": "",
+      "single": "1",
+      "log": "nouveau: Detected VRAM RAM=4G\n",
+      "expected": [
+        "nouveau: Detected VRAM RAM=4G"
+      ]
+    },
+    {
+      "name": "radeon_legacy_single",
+      "pci": "0000:01:00.0",
+      "card": "",
+      "single": "1",
+      "log": "radeon: VRAM size 8G\n",
+      "expected": [
+        "radeon: VRAM size 8G"
+      ]
+    },
+    {
+      "name": "amd_legacy_single",
+      "pci": "0000:01:00.0",
+      "card": "",
+      "single": "1",
+      "log": "amdgpu: VRAM: 8192 MiB\n",
+      "expected": [
+        "amdgpu: VRAM: 8192 MiB"
+      ]
+    },
+    {
+      "name": "ambiguous_multi_gpu",
+      "pci": "0000:01:00.0",
+      "card": "",
+      "single": "0",
+      "log": "nouveau: Detected VRAM RAM=4G\n",
+      "expected": []
+    },
+    {
+      "name": "specific_before_generic",
+      "pci": "0000:01:00.0",
+      "card": "",
+      "single": "1",
+      "log": "amdgpu: VRAM: 4096M\namdgpu 0000:01:00.0: VRAM: 8192M\n",
+      "expected": [
+        "amdgpu 0000:01:00.0: VRAM: 8192M"
+      ]
+    },
+    {
+      "name": "nonzero_domain",
+      "pci": "0001:01:00.0",
+      "card": "",
+      "single": "0",
+      "log": "amdgpu 0000:01:00.0: VRAM: 4096M\namdgpu 0001:01:00.0: VRAM: 8192M\n",
+      "expected": [
+        "amdgpu 0001:01:00.0: VRAM: 8192M"
+      ]
+    }
+  ]
+}

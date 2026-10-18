@@ -14,10 +14,32 @@ _write_grubenv() {
     local file="$1" val="$2"
     printf '# GRUB Environment Block\nmemtest_next=%s\n' "$val" > "$file" || return 1
     local used
-    used=$(wc -c < "$file")
+    used=$(wc -c < "$file") || return 1
     local pad=$((1024 - used))
-    [ "$pad" -gt 0 ] && dd if=/dev/zero bs=1 count="$pad" 2>/dev/null | tr '\0' '#' >> "$file"
-    return 0
+    if [ "$pad" -gt 0 ]; then
+        dd if=/dev/zero bs=1 count="$pad" 2>/dev/null | tr '\0' '#' >> "$file" || return 1
+    fi
+    [ "$(wc -c < "$file")" = 1024 ]
+}
+
+cancel_memtest_request() {
+    local usb_mp="$1" result=1
+    mount -o remount,rw "$usb_mp" 2>/dev/null || return 1
+    if _write_grubenv "$usb_mp/grubenv" 0 &&
+       grep -q '^memtest_next=0$' "$usb_mp/grubenv" && sync; then
+        result=0
+    fi
+    mount -o remount,ro "$usb_mp" 2>/dev/null || result=1
+    return "$result"
+}
+
+memtest_start_failed() {
+    local usb_mp="$1"
+    MEMTEST_FAIL="$2"
+    if ! cancel_memtest_request "$usb_mp"; then
+        MEMTEST_FAIL="$MEMTEST_FAIL; the next-boot Memtest flag could not be cleared"
+    fi
+    return 1
 }
 
 # Find the mount point of the USB FAT32 filesystem already mounted by Alpine init.
@@ -145,25 +167,34 @@ run_memtest() {
     mount -o remount,ro "$usb_mp" 2>/dev/null || true
 
     if [ "$write_ok" -ne 0 ]; then
-        MEMTEST_FAIL="Failed to write grubenv to $usb_mp"
+        memtest_start_failed "$usb_mp" "Failed to write grubenv to $usb_mp"
         return 1
     fi
     if [ "$verify_ok" -ne 1 ]; then
-        MEMTEST_FAIL="grubenv verification failed on $usb_mp"
+        memtest_start_failed "$usb_mp" "grubenv verification failed on $usb_mp"
         return 1
     fi
     if [ "$header_ok" -ne 1 ] || [ "$size_ok" -ne 1 ]; then
-        MEMTEST_FAIL="grubenv integrity check failed on $usb_mp"
+        memtest_start_failed "$usb_mp" "grubenv integrity check failed on $usb_mp"
         return 1
     fi
     if [ "$sync_ok" -ne 1 ]; then
-        MEMTEST_FAIL="Failed to sync grubenv changes on $usb_mp"
+        memtest_start_failed "$usb_mp" "Failed to sync grubenv changes on $usb_mp"
         return 1
     fi
 
-    reboot
-    # reboot is async — block here so the script never reaches the error display
-    while true; do sleep 1; done
+    if ! reboot; then
+        memtest_start_failed "$usb_mp" 'The reboot request failed'
+        return 1
+    fi
+    # A normal async reboot stops this process. Do not wait forever if it stalls.
+    local waited=0
+    while [ "$waited" -lt 15 ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    memtest_start_failed "$usb_mp" 'The PC did not restart within 15 seconds'
+    return 1
 }
 
 # Get total RAM in human-readable form
@@ -187,13 +218,17 @@ printf '\033[2J\033[H' > "$TTY" 2>/dev/null
     item "Test tool" "Memtest86+ 8.00"
     printf "\n"
     printf "  Reboots into Memtest86+.\n"
-    printf "  Returns to PCInfo after test completes.\n"
+    printf "  Tests repeat until you stop them.\n"
+    printf "  Press Esc to reboot; PCInfo opens on the next boot.\n"
     printf "\n${SEP}\n"
     printf "  Enter: Start   q: Back\n"
 } > "$TTY"
 
 while true; do
-    read_key
+    if ! read_key; then
+        printf '\nKeyboard input failed. Memory Test was not started.\n' > "$TTY" 2>/dev/null
+        exit 1
+    fi
     case "$key" in
         q|Q) break ;;
         ''|' ')
