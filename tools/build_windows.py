@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import io
 import json
@@ -48,24 +49,67 @@ def clean_abandoned():
             shutil.rmtree(path)
 
 
+def clean_generated():
+    """取得物・展開ツールは毎回片付ける。完成IMGとソースには触れない。"""
+    parent = ROOT / "build/work"
+    validate_work_paths()
+    for path in (parent / "downloads", WORK / "toolchain"):
+        if not path.exists():
+            continue
+        if path.is_symlink() or path.is_junction() or not path.resolve().is_relative_to(parent.resolve()):
+            raise ValueError(f"ビルド作業領域のパスが不正です: {path}")
+        shutil.rmtree(path)
+
+
+def validate_work_paths():
+    for path in (ROOT / "build", ROOT / "build/work", WORK):
+        if path.is_symlink() or path.is_junction() or not path.resolve().is_relative_to(ROOT.resolve()):
+            raise ValueError(f"ビルド作業領域のパスが不正です: {path}")
+
+
+def prune_empty_work():
+    for path in (WORK, WORK.parent):
+        try:
+            path.rmdir()
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            if error.errno not in (errno.ENOTEMPTY, errno.EEXIST):
+                raise
+
+
 @contextmanager
 def build_lock():
     """同じ取得領域・出力を2つのビルドが同時更新しないようにする。"""
+    validate_work_paths()
     WORK.mkdir(parents=True, exist_ok=True)
-    with (WORK / ".build.lock").open("a+b") as lock:
-        if lock.tell() == 0:
-            lock.write(b"0")
-            lock.flush()
-        lock.seek(0)
-        try:
-            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
-        except OSError as error:
-            raise RuntimeError("別のWindowsビルドが実行中です") from error
-        try:
-            yield
-        finally:
+    lock_path = WORK / ".build.lock"
+    acquired = False
+    try:
+        with lock_path.open("a+b") as lock:
+            if lock.tell() == 0:
+                lock.write(b"0")
+                lock.flush()
             lock.seek(0)
-            msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            try:
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as error:
+                raise RuntimeError("別のWindowsビルドが実行中です") from error
+            acquired = True
+            try:
+                yield
+            finally:
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+    finally:
+        if acquired:
+            try:
+                lock_path.unlink(missing_ok=True)
+            except PermissionError as error:
+                # 次のビルドが取得したファイルハンドルはWindowsの共有規則で保護される。
+                if error.winerror != 32:
+                    raise
+            prune_empty_work()
 
 
 def publish(image: Path, record: Path):
@@ -400,8 +444,11 @@ def main():
         parser.error("--offlineと--refreshは併用できません")
     try:
         with build_lock():
-            clean_abandoned()
-            run(args)
+            try:
+                clean_abandoned()
+                run(args)
+            finally:
+                clean_generated()
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"ビルド失敗: {error}", file=sys.stderr)
         return 1

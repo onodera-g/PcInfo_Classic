@@ -6,8 +6,7 @@ import re
 from pathlib import Path
 
 
-FIXED_INPUTS = ("LICENSE", ".gitattributes", "requirements-dev.txt", "tools/ビルド.cmd",
-                "tools/build_windows.py", "tools/setup_windows.ps1")
+FIXED_INPUTS = ("LICENSE", ".gitattributes", "requirements-dev.txt", "tools/build_windows.py")
 INPUT_TREES = ("src", "data", "licenses", "tools/packaging")
 
 

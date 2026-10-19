@@ -21,28 +21,39 @@ x86_64のPCで、BIOS又はx86_64 UEFIから起動します。Secure Bootには�
 
 ### ビルド・検証
 
-Windows 11、Windows版Python 3.12、Git、初回のインターネット接続が必要です。Docker・WSLは不要です。
+Windows 11、Windows版Python 3.12、Git、インターネット接続が必要です。Docker・WSLは不要です。
 
 PowerShellで実行します。
 
 ```powershell
 git clone https://github.com/onodera-g/PcInfo_Classic.git
 Set-Location -LiteralPath '.\PcInfo_Classic'
-.\tools\セットアップ.cmd
-.\tools\ビルド.cmd
-.\tools\検証.cmd
+$savedTemp, $savedTmp, $savedTmpDir = $env:TEMP, $env:TMP, $env:TMPDIR
+$env:TEMP = $env:TMP = (New-Item -ItemType Directory -Force '.\.venv\.tmp').FullName
+$env:TMPDIR = $env:TEMP
+try {
+    py -3.12 -B -m venv .venv
+    if ($LASTEXITCODE) { throw 'Python environment creation failed.' }
+    .\.venv\Scripts\python.exe -B -m pip install --no-cache-dir -r requirements-dev.txt
+    if ($LASTEXITCODE) { throw 'Dependency installation failed.' }
+} finally {
+    $env:TEMP = $savedTemp
+    $env:TMP = $savedTmp
+    $env:TMPDIR = $savedTmpDir
+    Remove-Item -LiteralPath '.\.venv\.tmp' -Recurse -Force
+}
+.\.venv\Scripts\python.exe -B tools/build_windows.py
 ```
 
-完成IMGとSHA-256等を記録したmanifestは`build/output/`に生成されます。
+完成IMGとSHA-256等を記録したmanifestは`build/output/`に生成されます。ビルド時に同梱ファイルと起動領域を検証し、取得物と中間ファイルは終了時に削除します。2回目以降は最後のビルドコマンドだけを実行します。
 
-単体テストのみ実行する場合は`.\tools\検証.cmd --tests-only`を使用します。生成IMGの実機起動・診断は未確認のため、対象PCで別途確認してください。
+生成IMGの実機起動・診断は、対象PCで別途確認してください。起動引数などの既定値は`tools/packaging/build_config.json`にあり、開発PCの画面設定を参照しません。
 
 ### ソース構成
 
 - `src/`：診断プログラム本体
 - `data/gpu/`：GPU判定データ
-- `tools/`：セットアップ・ビルド・検証
-- `tests/`：テストと固定サンプル
+- `tools/`：IMG生成コードと同梱設定
 - `licenses/`：第三者ライセンス・表記
 
 ### ライセンス・報告
@@ -70,28 +81,39 @@ Prebuilt IMG files are distributed separately. Write the entire image to a USB d
 
 ### Build and verification
 
-Requires Windows 11, Python 3.12 for Windows, Git, and an internet connection for the initial setup and build. Docker and WSL are not required.
+Requires Windows 11, Python 3.12 for Windows, Git, and an internet connection. Docker and WSL are not required.
 
 Run in PowerShell:
 
 ```powershell
 git clone https://github.com/onodera-g/PcInfo_Classic.git
 Set-Location -LiteralPath '.\PcInfo_Classic'
-.\tools\セットアップ.cmd
-.\tools\ビルド.cmd
-.\tools\検証.cmd
+$savedTemp, $savedTmp, $savedTmpDir = $env:TEMP, $env:TMP, $env:TMPDIR
+$env:TEMP = $env:TMP = (New-Item -ItemType Directory -Force '.\.venv\.tmp').FullName
+$env:TMPDIR = $env:TEMP
+try {
+    py -3.12 -B -m venv .venv
+    if ($LASTEXITCODE) { throw 'Python environment creation failed.' }
+    .\.venv\Scripts\python.exe -B -m pip install --no-cache-dir -r requirements-dev.txt
+    if ($LASTEXITCODE) { throw 'Dependency installation failed.' }
+} finally {
+    $env:TEMP = $savedTemp
+    $env:TMP = $savedTmp
+    $env:TMPDIR = $savedTmpDir
+    Remove-Item -LiteralPath '.\.venv\.tmp' -Recurse -Force
+}
+.\.venv\Scripts\python.exe -B tools/build_windows.py
 ```
 
-The IMG and a manifest containing its SHA-256 and other build records are generated in `build/output/`.
+The IMG and a manifest containing its SHA-256 and other build records are generated in `build/output/`. The build verifies packaged files and boot sectors, then removes downloads and intermediate files. For subsequent builds, run only the final build command.
 
-To run unit tests only, use `.\tools\検証.cmd --tests-only`. Hardware boot and diagnostic testing of the generated IMG has not yet been performed; verify it on the target PC separately.
+Verify hardware boot and diagnostics on the target PC separately. Boot defaults are in `tools/packaging/build_config.json`; they do not use the development PC's display settings.
 
 ### Source layout
 
 - `src/`: Diagnostic application
 - `data/gpu/`: GPU identification data
-- `tools/`: Setup, build, and verification tools
-- `tests/`: Tests and fixtures
+- `tools/`: IMG generation code and packaged configuration
 - `licenses/`: Third-party licenses and notices
 
 ### License and feedback

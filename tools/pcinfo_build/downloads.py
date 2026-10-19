@@ -47,8 +47,9 @@ class Downloads:
             print(f"取得: {name}", flush=True)
             try:
                 request = urllib.request.Request(url, headers={"User-Agent": "PCInfoClassic-WindowsBuild/1"})
-                curl = Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32/curl.exe"
-                if os.name == "nt" and curl.is_file():
+                system_root = os.environ.get("SystemRoot")
+                curl = Path(system_root) / "System32/curl.exe" if system_root else None
+                if os.name == "nt" and curl is not None and curl.is_file():
                     self._curl(curl, url, partial)
                 else:
                     for attempt in range(3):
