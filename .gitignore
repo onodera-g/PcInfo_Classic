@@ -1,6 +1,7 @@
 # プロジェクト内の開発環境・再生成物
 /.venv/
 /.cache/
+/_local/
 /build/
 /export/
 __pycache__/

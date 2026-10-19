@@ -32,7 +32,7 @@ class InputSnapshotTests(unittest.TestCase):
         verify_source_snapshot(self.root, self.record)
 
     def test_template_and_builder_changes_require_rebuild(self):
-        for name in ("tools/packaging/sample.txt", "tools/build_windows.py", "tools/pcinfo_build/sample.py",
+        for name in ("tools/packaging/sample.txt", "tools/ビルド.cmd", "tools/build_windows.py", "tools/pcinfo_build/sample.py",
                      "src/sample.txt", "data/sample.txt", "licenses/sample.txt", "requirements-dev.txt"):
             with self.subTest(name=name):
                 path = self.root / name
@@ -48,8 +48,9 @@ class InputSnapshotTests(unittest.TestCase):
                      "src/lib/storage.sh", "src/lib/hardware.sh", "src/storage_devices.jq",
                      "tools/packaging/overlay/etc/inittab",
                      "tools/packaging/overlay/etc/apk/world", "tools/packaging/overlay/root/.profile",
-                     "tools/pcinfo_build/image.py", "tools/build_windows.py", "requirements-dev.txt"):
+                     "tools/pcinfo_build/image.py", "tools/build_windows.py", "tools/ビルド.cmd", "requirements-dev.txt"):
             self.assertIn(name, files)
+        self.assertNotIn("ビルド.cmd", files)
 
     def test_missing_mandatory_input_is_not_ignored(self):
         (self.root / "tools/build_windows.py").unlink()
